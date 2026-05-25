@@ -1,0 +1,80 @@
+# extension-k8s
+
+**Status:** Stub — **MVP** (implement with `extension-cloud`)
+
+| Constant | Value |
+|----------|--------|
+| `providerId` | `k8s` |
+| Command namespace | `k8s.*` |
+
+## Purpose
+
+Kubernetes cluster connections in the unified Cloud tree. Inventory and safe operations run in the **browser** via the Kubernetes API (no Companion for MVP).
+
+## Prerequisites
+
+1. `extension-cloud` — models, `cloudConnectionService`, connection + tree contributor registry, scope
+
+## Implementation checklist
+
+### 1. Register contributors (in `k8s-extension-loader.ts`)
+
+When `extension-cloud` exists:
+
+- `CloudConnectionContributor` for `providerId: 'k8s'`
+- `CloudTreeContributor` for the same `providerId`
+
+### 2. Connection flow (`connect` / `restore`)
+
+- **Connect UI:** URL + bearer token, or workspace kubeconfig path (file picker / path under workspace).
+- **Persist** in `.cloudadmin/connections.json` only: `connectionId`, `name`, `providerId`, `persistData` (e.g. `kubeconfigPath`, `context`, `serverUrl` — **no** tokens or certs).
+- **Secrets:** keep credentials in session memory or OS/browser storage per R-SEC7.1; never write to `connections.json`.
+- **Restore:** validate kubeconfig/context still exists; mark root node error state if unreachable (PROV13.13).
+
+### 3. Tree hierarchy (PROV13.10)
+
+```
+connection (cluster)
+  └── scope (kube context)
+        └── group (namespace)
+              └── workload (pod; service/ingress TBD)
+```
+
+Tree `kind` values use `CloudTreeNodeKind` from `extension-cloud` (`connection`, `scope`, `group`, `workload`, `service`).
+
+Implement `getChildren(parentId)` with stable node ids: `{connectionId}/{kind}/{...}`.
+
+### 4. Browser API layer (`src/api/`)
+
+- Use `@kubernetes/client-node` or typed `fetch` to API server with credentials from connect flow.
+- **MVP inventory:** list contexts, namespaces, pods, deployments, services, events, get manifest (read-only).
+- Map results to `Resource` (PROV13.2).
+
+### 5. Commands (Phase 1+)
+
+Register only `k8s.*` in this extension. MVP browser-only; defer to Companion:
+
+| Command | `requiresCompanion` |
+|---------|---------------------|
+| `k8s.logs.follow` | yes (if not browser-streamed) |
+| `k8s.portForward.start\|stop\|status` | yes |
+| `k8s.exec.start\|stop` | yes |
+
+### 6. Dependencies (add when implementing)
+
+```bash
+npm install @kubernetes/client-node -w extension-k8s
+```
+
+Prefer fetch + minimal types if bundle size is a concern.
+
+## Requirements references
+
+- PROV13.1–13.13, §15 Kubernetes, §23.1 MVP catalog
+- `docs/internal/mvp-scope.md`
+
+## Testing
+
+- Connect to a kind/minikube cluster via kubeconfig in workspace
+- Expand tree through namespace → pod
+- Disconnect removes root; `connections.json` updated

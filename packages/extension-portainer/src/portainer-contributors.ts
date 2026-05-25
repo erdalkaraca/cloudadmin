@@ -1,0 +1,124 @@
+import {
+  getConnectionSecrets,
+  registerCloudProvider,
+  setConnectionSecrets,
+  type CloudConnection,
+  type CloudConnectionContributor,
+  type CloudConnectResult,
+  type CloudTreeContributor,
+  CloudTreeNodeKind,
+  type CloudTreeNodeRef,
+} from 'extension-cloud/api';
+import { PROVIDER_DISPLAY_NAME, PROVIDER_ID } from './provider';
+import {
+  listContainers,
+  listEndpoints,
+  testPortainerConnection,
+  validatePortainerCredentials,
+  type PortainerPersistData,
+} from './api/portainer-client';
+
+function persistOf(connection: CloudConnection): PortainerPersistData {
+  return { serverUrl: String(connection.persistData.serverUrl ?? '') };
+}
+
+function nodeId(connectionId: string, ...parts: string[]): string {
+  return [connectionId, ...parts].join('/');
+}
+
+async function ensureApiKey(connection: CloudConnection): Promise<void> {
+  if (getConnectionSecrets(connection.id)?.apiKey) return;
+  const apiKey = window.prompt(
+    `Portainer API key for "${connection.name}" (saved in workspace app settings)`,
+  );
+  if (!apiKey?.trim()) throw new Error('API key required to load Portainer resources.');
+  const persist = persistOf(connection);
+  await validatePortainerCredentials(persist, apiKey.trim());
+  await setConnectionSecrets(connection.id, { apiKey: apiKey.trim() });
+}
+
+async function promptConnect(): Promise<CloudConnectResult> {
+  const name = window.prompt('Connection name', 'Portainer');
+  if (!name?.trim()) throw new Error('Connection cancelled');
+  const serverUrl = window.prompt('Portainer URL', 'https://localhost:9443');
+  if (!serverUrl?.trim()) throw new Error('Connection cancelled');
+  const apiKey = window.prompt('API key');
+  if (!apiKey?.trim()) throw new Error('Connection cancelled');
+  const persistData: PortainerPersistData = { serverUrl: serverUrl.trim() };
+  await validatePortainerCredentials(persistData, apiKey.trim());
+  return {
+    name: name.trim(),
+    persistData: { serverUrl: persistData.serverUrl },
+    secrets: { apiKey: apiKey.trim() },
+  };
+}
+
+const connectionContributor: CloudConnectionContributor = {
+  providerId: PROVIDER_ID,
+  label: PROVIDER_DISPLAY_NAME,
+  icon: 'cubes',
+  getActions: () => [],
+  connect: promptConnect,
+  async restore(connection) {
+    if (!getConnectionSecrets(connection.id)?.apiKey) {
+      return {
+        ...connection,
+        status: 'disconnected',
+        errorMessage: 'Expand connection to enter API key.',
+      };
+    }
+    await testPortainerConnection(connection.id, persistOf(connection));
+    return { ...connection, status: 'connected', errorMessage: undefined };
+  },
+  async disconnect(_connectionId) {},
+};
+
+function isUnderConnection(parent: CloudTreeNodeRef | null): boolean {
+  return !parent || parent.kind === CloudTreeNodeKind.Connection;
+}
+
+const treeContributor: CloudTreeContributor = {
+  providerId: PROVIDER_ID,
+  async getChildren(parent, connection) {
+    await ensureApiKey(connection);
+    const persist = persistOf(connection);
+    if (isUnderConnection(parent)) {
+      const endpoints = await listEndpoints(connection.id, persist);
+      return endpoints.map(
+        (ep): CloudTreeNodeRef => ({
+          nodeId: nodeId(connection.id, CloudTreeNodeKind.Scope, String(ep.id)),
+          connectionId: connection.id,
+          providerId: PROVIDER_ID,
+          kind: CloudTreeNodeKind.Scope,
+          label: ep.name,
+          hasChildren: true,
+          resourceId: String(ep.id),
+          meta: { endpointId: ep.id, endpointType: ep.type },
+        }),
+      );
+    }
+    if (!parent) return [];
+    if (parent.kind === CloudTreeNodeKind.Scope) {
+      const endpointId = Number(parent.meta?.endpointId ?? parent.resourceId);
+      const containers = await listContainers(connection.id, persist, endpointId);
+      return containers.map((c) => {
+        const shortName = (c.Names[0] ?? c.Id).replace(/^\//, '');
+        return {
+          nodeId: nodeId(connection.id, CloudTreeNodeKind.Workload, String(endpointId), c.Id),
+          connectionId: connection.id,
+          providerId: PROVIDER_ID,
+          kind: CloudTreeNodeKind.Workload,
+          label: `${shortName} (${c.State})`,
+          hasChildren: false,
+          resourceId: c.Id,
+          meta: { endpointId, state: c.State, status: c.Status },
+        };
+      });
+    }
+    return [];
+  },
+};
+
+export function registerPortainerProvider(): void {
+  registerCloudProvider(connectionContributor, treeContributor);
+}
