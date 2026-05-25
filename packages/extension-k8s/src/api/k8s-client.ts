@@ -102,3 +102,38 @@ export async function listPods(
     phase: i.status?.phase,
   }));
 }
+
+export async function getPod(
+  connectionId: string,
+  persist: K8sPersistData,
+  namespace: string,
+  podName: string,
+): Promise<unknown> {
+  const res = await k8sFetch(
+    connectionId,
+    persist,
+    `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods/${encodeURIComponent(podName)}`,
+  );
+  if (!res.ok) throw new Error(`get pod: ${res.status}`);
+  return res.json();
+}
+
+export async function getPodLogs(
+  connectionId: string,
+  persist: K8sPersistData,
+  namespace: string,
+  podName: string,
+  tailLines = 500,
+): Promise<string> {
+  const query = new URLSearchParams({ tailLines: String(tailLines) });
+  const res = await k8sFetch(
+    connectionId,
+    persist,
+    `/api/v1/namespaces/${encodeURIComponent(namespace)}/pods/${encodeURIComponent(podName)}/log?${query}`,
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`pod logs: ${res.status} ${body.slice(0, 200)}`);
+  }
+  return res.text();
+}

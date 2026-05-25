@@ -1,16 +1,19 @@
 import { formDialogRequired } from '@eclipse-docks/core';
 import {
+  CloudTreeNodeKind,
   getConnectionSecrets,
+  openWorkloadEditor,
   registerCloudProvider,
   setConnectionSecrets,
   type CloudConnection,
   type CloudConnectionContributor,
   type CloudConnectResult,
+  type CloudTreeAction,
   type CloudTreeContributor,
-  CloudTreeNodeKind,
   type CloudTreeNodeRef,
 } from 'extension-cloud/api';
 import { PROVIDER_DISPLAY_NAME, PROVIDER_ID } from './provider';
+import { portainerWorkloadHandler } from './portainer-workload';
 import {
   listContainers,
   listEndpoints,
@@ -67,7 +70,23 @@ const connectionContributor: CloudConnectionContributor = {
   providerId: PROVIDER_ID,
   label: PROVIDER_DISPLAY_NAME,
   icon: 'cubes',
-  getActions: () => [],
+  getActions(node): CloudTreeAction[] {
+    if (node.kind !== CloudTreeNodeKind.Workload) return [];
+    return [
+      {
+        id: 'portainer.workload.open',
+        label: 'Open',
+        icon: 'up-right-from-square',
+        run: (ctx) => openWorkloadEditor(ctx.connection, ctx.node, 'overview'),
+      },
+      {
+        id: 'portainer.workload.logs',
+        label: 'View logs',
+        icon: 'scroll',
+        run: (ctx) => openWorkloadEditor(ctx.connection, ctx.node, 'logs'),
+      },
+    ];
+  },
   connect: promptConnect,
   async restore(connection) {
     if (!getConnectionSecrets(connection.id)?.apiKey) {
@@ -130,5 +149,5 @@ const treeContributor: CloudTreeContributor = {
 };
 
 export function registerPortainerProvider(): void {
-  registerCloudProvider(connectionContributor, treeContributor);
+  registerCloudProvider(connectionContributor, treeContributor, portainerWorkloadHandler);
 }

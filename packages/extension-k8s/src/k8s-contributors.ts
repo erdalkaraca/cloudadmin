@@ -1,16 +1,19 @@
 import { formDialogRequired } from '@eclipse-docks/core';
 import {
+  CloudTreeNodeKind,
   getConnectionSecrets,
+  openWorkloadEditor,
   registerCloudProvider,
   setConnectionSecrets,
   type CloudConnection,
   type CloudConnectionContributor,
   type CloudConnectResult,
+  type CloudTreeAction,
   type CloudTreeContributor,
-  CloudTreeNodeKind,
   type CloudTreeNodeRef,
 } from 'extension-cloud/api';
 import { PROVIDER_DISPLAY_NAME, PROVIDER_ID } from './provider';
+import { k8sWorkloadHandler } from './k8s-workload';
 import {
   listNamespaces,
   listPods,
@@ -72,7 +75,23 @@ const connectionContributor: CloudConnectionContributor = {
   providerId: PROVIDER_ID,
   label: PROVIDER_DISPLAY_NAME,
   icon: 'diagram-project',
-  getActions: () => [],
+  getActions(node): CloudTreeAction[] {
+    if (node.kind !== CloudTreeNodeKind.Workload) return [];
+    return [
+      {
+        id: 'k8s.workload.open',
+        label: 'Open',
+        icon: 'up-right-from-square',
+        run: (ctx) => openWorkloadEditor(ctx.connection, ctx.node, 'overview'),
+      },
+      {
+        id: 'k8s.workload.logs',
+        label: 'View logs',
+        icon: 'scroll',
+        run: (ctx) => openWorkloadEditor(ctx.connection, ctx.node, 'logs'),
+      },
+    ];
+  },
   connect: promptConnect,
   async restore(connection) {
     if (!getConnectionSecrets(connection.id)?.token) {
@@ -133,7 +152,7 @@ const treeContributor: CloudTreeContributor = {
         label: pod.phase ? `${pod.name} (${pod.phase})` : pod.name,
         hasChildren: false,
         resourceId: pod.uid,
-        meta: { namespace, phase: pod.phase },
+        meta: { namespace, phase: pod.phase, podName: pod.name },
       }));
     }
     return [];
@@ -141,5 +160,5 @@ const treeContributor: CloudTreeContributor = {
 };
 
 export function registerK8sProvider(): void {
-  registerCloudProvider(connectionContributor, treeContributor);
+  registerCloudProvider(connectionContributor, treeContributor, k8sWorkloadHandler);
 }

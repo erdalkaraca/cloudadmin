@@ -61,6 +61,33 @@ export interface CloudTreeActionContext {
   node: CloudTreeNodeRef;
 }
 
+export type WorkloadLifecycleOp = 'start' | 'stop' | 'restart';
+
+export type WorkloadEditorTab = 'overview' | 'logs' | 'inspect';
+
+export interface WorkloadCapabilities {
+  logs?: boolean;
+  inspect?: boolean;
+  lifecycle?: WorkloadLifecycleOp[];
+}
+
+export interface WorkloadStatus {
+  label: string;
+  detail?: string;
+}
+
+export interface CloudWorkloadHandler {
+  providerId: string;
+  getCapabilities(context: CloudTreeActionContext): WorkloadCapabilities;
+  getStatus?(context: CloudTreeActionContext): Promise<WorkloadStatus>;
+  fetchLogs?(context: CloudTreeActionContext, options?: { tail?: number }): Promise<string>;
+  fetchInspect?(context: CloudTreeActionContext): Promise<unknown>;
+  lifecycle?(
+    context: CloudTreeActionContext,
+    operation: WorkloadLifecycleOp,
+  ): Promise<void>;
+}
+
 export interface CloudTreeAction {
   id: string;
   label: string;

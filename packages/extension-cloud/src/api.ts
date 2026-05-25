@@ -3,6 +3,14 @@ export const TOPIC_CLOUD_CONNECTIONS_CHANGED = 'events/cloudadmin/connectionsCha
 export { cloudConnectionService } from './cloud-connection-service';
 export { cloudTreeRegistry } from './cloud-tree-registry';
 export { registerCloudProvider } from './register-provider';
+export { openWorkloadEditor } from './cloud-workload-opener';
+export type {
+  CloudWorkloadHandler,
+  WorkloadCapabilities,
+  WorkloadEditorTab,
+  WorkloadLifecycleOp,
+  WorkloadStatus,
+} from './models';
 export {
   clearConnectionSecrets,
   getConnectionSecrets,

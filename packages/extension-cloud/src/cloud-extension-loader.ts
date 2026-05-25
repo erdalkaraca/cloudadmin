@@ -6,10 +6,12 @@ import {
 import { html } from '@eclipse-docks/core/externals/lit';
 import type { HTMLContribution } from '@eclipse-docks/core';
 import './docks-cloud-tree';
+import { registerCloudWorkloadEditor } from './cloud-workload-editor-registration';
 import { registerCloudView } from './docks-cloud-tree';
 import { getScopeContext } from './scope-context';
 
 export default function cloudExtensionLoader(): void {
+  registerCloudWorkloadEditor();
   registerCloudView();
 
   contributionRegistry.registerContribution(TOOLBAR_MAIN, {

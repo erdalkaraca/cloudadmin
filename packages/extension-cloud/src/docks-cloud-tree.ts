@@ -29,6 +29,7 @@ import { CLOUD_CONNECTIONS_DROPDOWN } from './cloud-connections-dropdown';
 import { confirmDialog, formDialogRequired } from '@eclipse-docks/core';
 import { runCloudAction, toastCloudError } from './cloud-toast';
 import { cloudConnectionService } from './cloud-connection-service';
+import { openWorkloadEditor } from './cloud-workload-opener';
 import { cloudTreeRegistry } from './cloud-tree-registry';
 import { TOPIC_CLOUD_CONNECTIONS_CHANGED } from './api';
 
@@ -166,6 +167,17 @@ export class DocksCloudTree extends DocksPart {
             if (!(await confirmDialog(`Disconnect "${connection.name}"?`))) return;
             await cloudConnectionService.removeConnection(connection.id);
           }),
+      });
+    }
+    if (cloudRef.kind === CloudTreeNodeKind.Workload) {
+      actions.push({
+        id: 'cloudadmin.shell.open-workload',
+        label: 'Open',
+        icon: 'up-right-from-square',
+        run: () =>
+          runCloudAction(() =>
+            openWorkloadEditor(connection, cloudRef, 'overview'),
+          ),
       });
     }
     actions.push({
@@ -373,6 +385,17 @@ export class DocksCloudTree extends DocksPart {
   }
 
   private onItemDblClicked(event: Event, node: TreeNode): void {
+    const data = node.data as CloudTreeNodeData | undefined;
+    if (
+      data &&
+      node.leaf &&
+      data.cloudRef.kind === CloudTreeNodeKind.Workload
+    ) {
+      void runCloudAction(() =>
+        openWorkloadEditor(data.connection, data.cloudRef, 'overview'),
+      );
+      return;
+    }
     const item = event.currentTarget as HTMLElement & { expanded?: boolean };
     if (!node.leaf && 'expanded' in item) item.expanded = !item.expanded;
   }
