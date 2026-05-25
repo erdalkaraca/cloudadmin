@@ -3,6 +3,7 @@ import { html } from '@eclipse-docks/core/externals/lit';
 import type { CloudConnectionContributor, CloudTreeContributor } from './models';
 import { CLOUD_CONNECTIONS_DROPDOWN } from './cloud-connections-dropdown';
 import { cloudConnectionService } from './cloud-connection-service';
+import { toastCloudError } from './cloud-toast';
 import { cloudTreeRegistry } from './cloud-tree-registry';
 
 export function registerCloudProvider(
@@ -26,9 +27,7 @@ export function registerCloudProvider(
       <docks-command
         icon=${connection.icon}
         .action=${() => {
-          void cloudConnectionService.connectProvider(providerId).catch((err) => {
-            console.error('[extension-cloud] connect failed', err);
-          });
+          void cloudConnectionService.connectProvider(providerId).catch(toastCloudError);
         }}
       >
         ${connection.label}

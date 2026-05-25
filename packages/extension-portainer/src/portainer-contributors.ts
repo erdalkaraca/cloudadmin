@@ -1,3 +1,4 @@
+import { formDialogRequired } from '@eclipse-docks/core';
 import {
   getConnectionSecrets,
   registerCloudProvider,
@@ -28,28 +29,37 @@ function nodeId(connectionId: string, ...parts: string[]): string {
 
 async function ensureApiKey(connection: CloudConnection): Promise<void> {
   if (getConnectionSecrets(connection.id)?.apiKey) return;
-  const apiKey = window.prompt(
-    `Portainer API key for "${connection.name}" (saved in workspace app settings)`,
-  );
-  if (!apiKey?.trim()) throw new Error('API key required to load Portainer resources.');
+  const { apiKey } = await formDialogRequired({
+    label: `Portainer credentials — ${connection.name}`,
+    fields: [
+      {
+        name: 'apiKey',
+        label: 'API key',
+        type: 'password',
+        placeholder: 'Saved in workspace app settings',
+      },
+    ],
+  });
   const persist = persistOf(connection);
-  await validatePortainerCredentials(persist, apiKey.trim());
-  await setConnectionSecrets(connection.id, { apiKey: apiKey.trim() });
+  await validatePortainerCredentials(persist, apiKey);
+  await setConnectionSecrets(connection.id, { apiKey });
 }
 
 async function promptConnect(): Promise<CloudConnectResult> {
-  const name = window.prompt('Connection name', 'Portainer');
-  if (!name?.trim()) throw new Error('Connection cancelled');
-  const serverUrl = window.prompt('Portainer URL', 'https://localhost:9443');
-  if (!serverUrl?.trim()) throw new Error('Connection cancelled');
-  const apiKey = window.prompt('API key');
-  if (!apiKey?.trim()) throw new Error('Connection cancelled');
-  const persistData: PortainerPersistData = { serverUrl: serverUrl.trim() };
-  await validatePortainerCredentials(persistData, apiKey.trim());
+  const values = await formDialogRequired({
+    label: 'Connect Portainer',
+    fields: [
+      { name: 'name', label: 'Connection name', value: 'Portainer' },
+      { name: 'serverUrl', label: 'Portainer URL', value: 'https://localhost:9443', type: 'url' },
+      { name: 'apiKey', label: 'API key', type: 'password' },
+    ],
+  });
+  const persistData: PortainerPersistData = { serverUrl: values.serverUrl };
+  await validatePortainerCredentials(persistData, values.apiKey);
   return {
-    name: name.trim(),
+    name: values.name,
     persistData: { serverUrl: persistData.serverUrl },
-    secrets: { apiKey: apiKey.trim() },
+    secrets: { apiKey: values.apiKey },
   };
 }
 

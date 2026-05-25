@@ -26,6 +26,8 @@ import {
   type CloudTreeNodeRef,
 } from './models';
 import { CLOUD_CONNECTIONS_DROPDOWN } from './cloud-connections-dropdown';
+import { confirmDialog, formDialogRequired } from '@eclipse-docks/core';
+import { runCloudAction, toastCloudError } from './cloud-toast';
 import { cloudConnectionService } from './cloud-connection-service';
 import { cloudTreeRegistry } from './cloud-tree-registry';
 import { TOPIC_CLOUD_CONNECTIONS_CHANGED } from './api';
@@ -142,24 +144,35 @@ export class DocksCloudTree extends DocksPart {
         id: 'cloudadmin.shell.rename',
         label: 'Rename',
         icon: 'pen',
-        run: async () => {
-          const name = window.prompt('Rename cloud connection', connection.name);
-          if (!name?.trim() || name.trim() === connection.name) return;
-          await cloudConnectionService.renameConnection(connection.id, name.trim());
-        },
+        run: () =>
+          runCloudAction(async () => {
+            const values = await formDialogRequired({
+              label: 'Rename connection',
+              fields: [
+                { name: 'name', label: 'Connection name', value: connection.name },
+              ],
+            });
+            const name = values.name;
+            if (name === connection.name) return;
+            await cloudConnectionService.renameConnection(connection.id, name);
+          }),
       });
       actions.push({
         id: 'cloudadmin.shell.disconnect',
         label: 'Disconnect',
         icon: 'trash',
-        run: () => cloudConnectionService.removeConnection(connection.id),
+        run: () =>
+          runCloudAction(async () => {
+            if (!(await confirmDialog(`Disconnect "${connection.name}"?`))) return;
+            await cloudConnectionService.removeConnection(connection.id);
+          }),
       });
     }
     actions.push({
       id: 'cloudadmin.shell.refresh',
       label: refreshLabelForKind(cloudRef.kind),
       icon: 'arrows-rotate',
-      run: () => this.refreshSelectedNode(data),
+      run: () => runCloudAction(() => this.refreshSelectedNode(data)),
     });
     return actions;
   }
@@ -191,6 +204,10 @@ export class DocksCloudTree extends DocksPart {
 
     if (cloudRef.kind === CloudTreeNodeKind.Connection) {
       await cloudConnectionService.refreshConnection(connection.id);
+      const updated = cloudConnectionService.getConnection(connection.id);
+      if (updated?.status === 'error' && updated.errorMessage) {
+        toastCloudError(new Error(updated.errorMessage));
+      }
       return;
     }
 
@@ -253,7 +270,10 @@ export class DocksCloudTree extends DocksPart {
           icon=${action.icon ?? ''}
           title=${action.label}
           ?disabled=${action.disabled ?? false}
-          .action=${() => void action.run({ connection: data.connection, node: data.cloudRef })}
+            .action=${() =>
+              void runCloudAction(() =>
+                action.run({ connection: data.connection, node: data.cloudRef }),
+              )}
         >
           ${action.label}
         </docks-command>

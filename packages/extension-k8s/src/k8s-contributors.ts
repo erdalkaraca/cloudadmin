@@ -1,3 +1,4 @@
+import { formDialogRequired } from '@eclipse-docks/core';
 import {
   getConnectionSecrets,
   registerCloudProvider,
@@ -33,28 +34,37 @@ function nodeId(connectionId: string, ...parts: string[]): string {
 
 async function ensureToken(connection: CloudConnection): Promise<void> {
   if (getConnectionSecrets(connection.id)?.token) return;
-  const token = window.prompt(
-    `Kubernetes bearer token for "${connection.name}" (saved in workspace app settings)`,
-  );
-  if (!token?.trim()) throw new Error('Bearer token required to load cluster resources.');
+  const { token } = await formDialogRequired({
+    label: `Kubernetes credentials — ${connection.name}`,
+    fields: [
+      {
+        name: 'token',
+        label: 'Bearer token',
+        type: 'password',
+        placeholder: 'Saved in workspace app settings',
+      },
+    ],
+  });
   const persist = persistOf(connection);
   await validateK8sCredentials(persist, token.trim());
   await setConnectionSecrets(connection.id, { token: token.trim() });
 }
 
 async function promptConnect(): Promise<CloudConnectResult> {
-  const name = window.prompt('Connection name', 'Kubernetes cluster');
-  if (!name?.trim()) throw new Error('Connection cancelled');
-  const serverUrl = window.prompt('API server URL', 'https://127.0.0.1:6443');
-  if (!serverUrl?.trim()) throw new Error('Connection cancelled');
-  const token = window.prompt('Bearer token');
-  if (!token?.trim()) throw new Error('Connection cancelled');
-  const persistData: K8sPersistData = { serverUrl: serverUrl.trim(), context: 'default' };
-  await validateK8sCredentials(persistData, token.trim());
+  const values = await formDialogRequired({
+    label: 'Connect Kubernetes',
+    fields: [
+      { name: 'name', label: 'Connection name', value: 'Kubernetes cluster' },
+      { name: 'serverUrl', label: 'API server URL', value: 'https://127.0.0.1:6443', type: 'url' },
+      { name: 'token', label: 'Bearer token', type: 'password' },
+    ],
+  });
+  const persistData: K8sPersistData = { serverUrl: values.serverUrl, context: 'default' };
+  await validateK8sCredentials(persistData, values.token);
   return {
-    name: name.trim(),
+    name: values.name,
     persistData: { ...persistData },
-    secrets: { token: token.trim() },
+    secrets: { token: values.token },
   };
 }
 
