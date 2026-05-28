@@ -152,13 +152,13 @@ const connectionContributor: CloudConnectionContributor = {
         id: 'k8s.workload.open',
         label: 'Open',
         icon: 'up-right-from-square',
-        run: (ctx) => openWorkloadEditor(ctx.connection, ctx.node, 'overview'),
+        run: (ctx) => openWorkloadEditor(ctx.connection, ctx.node),
       },
       {
         id: 'k8s.workload.logs',
         label: 'View logs',
         icon: 'scroll',
-        run: (ctx) => openWorkloadEditor(ctx.connection, ctx.node, 'logs'),
+        run: (ctx) => openWorkloadEditor(ctx.connection, ctx.node),
       },
     ];
   },

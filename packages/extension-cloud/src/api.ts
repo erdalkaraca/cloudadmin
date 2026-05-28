@@ -4,6 +4,13 @@ export { cloudConnectionService } from './cloud-connection-service';
 export { cloudTreeRegistry } from './cloud-tree-registry';
 export { registerCloudProvider } from './register-provider';
 export { openWorkloadEditor } from './cloud-workload-opener';
+export {
+  WORKLOAD_EDITOR_TABS_ID,
+  WORKLOAD_TAB_CONFIG,
+  WORKLOAD_TAB_INSPECT,
+  WORKLOAD_TAB_LOGS,
+  WORKLOAD_TAB_OVERVIEW,
+} from './workload-editor/constants';
 export type {
   CloudWorkloadHandler,
   WorkloadCapabilities,

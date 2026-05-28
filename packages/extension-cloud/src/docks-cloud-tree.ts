@@ -190,7 +190,7 @@ export class DocksCloudTree extends DocksPart {
         icon: 'up-right-from-square',
         run: () =>
           runCloudAction(() =>
-            openWorkloadEditor(connection, cloudRef, 'overview'),
+            openWorkloadEditor(connection, cloudRef),
           ),
       });
     }
@@ -421,7 +421,7 @@ export class DocksCloudTree extends DocksPart {
       data.cloudRef.kind === CloudTreeNodeKind.Workload
     ) {
       void runCloudAction(() =>
-        openWorkloadEditor(data.connection, data.cloudRef, 'overview'),
+        openWorkloadEditor(data.connection, data.cloudRef),
       );
       return;
     }
