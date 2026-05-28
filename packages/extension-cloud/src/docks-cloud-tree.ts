@@ -59,6 +59,8 @@ function refreshLabelForKind(kind: CloudTreeNodeKind): string {
   }
 }
 
+type WaTreeItemElement = HTMLElement & { lazy?: boolean; loading?: boolean };
+
 function resolveTreeIcon(ref: CloudTreeNodeRef, connection: CloudConnection): string {
   if (ref.icon) return ref.icon;
   if (ref.kind === CloudTreeNodeKind.Connection) {
@@ -140,6 +142,18 @@ export class DocksCloudTree extends DocksPart {
   private shellActions(data: CloudTreeNodeData): CloudTreeAction[] {
     const { cloudRef, connection } = data;
     const actions: CloudTreeAction[] = [];
+    if (cloudConnectionService.supportsEditConnection(connection.providerId)) {
+      actions.push({
+        id: 'cloudadmin.shell.edit',
+        label: 'Edit connection',
+        icon: 'pen-to-square',
+        run: () =>
+          runCloudAction(async () => {
+            await cloudConnectionService.editConnection(connection.id);
+            await this.rebuildTree();
+          }),
+      });
+    }
     if (cloudRef.kind === CloudTreeNodeKind.Connection) {
       actions.push({
         id: 'cloudadmin.shell.rename',
@@ -325,7 +339,7 @@ export class DocksCloudTree extends DocksPart {
     return sel?.connection ? sel : undefined;
   }
 
-  private async loadNodeChildren(node: TreeNode): Promise<void> {
+  private async loadNodeChildren(node: TreeNode, render = true): Promise<void> {
     const data = node.data as CloudTreeNodeData | undefined;
     if (!data || node.leaf || node.loaded || this.loadingNodes.has(node)) return;
     this.loadingNodes.add(node);
@@ -333,15 +347,29 @@ export class DocksCloudTree extends DocksPart {
       const children = await cloudTreeRegistry.getChildren(data.cloudRef, data.connection);
       node.children = children.map((ref) => this.cloudRefToTreeNode(ref, data.connection));
       node.loaded = true;
+      if (render) {
+        this.requestUpdate();
+      }
     } catch (err) {
       node.loadError = err instanceof Error ? err.message : String(err);
+      node.loaded = true;
+      if (render) {
+        this.requestUpdate();
+      }
     } finally {
       this.loadingNodes.delete(node);
     }
   }
 
-  private async onLazyLoad(_event: Event, node: TreeNode): Promise<void> {
-    await this.loadNodeChildren(node);
+  private async onLazyLoad(event: Event, node: TreeNode): Promise<void> {
+    const item = event.currentTarget as WaTreeItemElement;
+    if (!node.loaded) {
+      await this.loadNodeChildren(node, false);
+    }
+    // filebrowser sets `loaded` + re-render; WA also needs `loading` cleared on the
+    // live item when the children slot stays empty (no slotchange event).
+    item.lazy = false;
+    item.loading = false;
     this.requestUpdate();
   }
 
@@ -358,6 +386,7 @@ export class DocksCloudTree extends DocksPart {
 
   createTreeItems(node: TreeNode, expanded = false): TemplateResult {
     if (!node) return html``;
+    // Same rule as filebrowser: lazy only until children have been fetched once.
     const isLazy = !node.leaf && !node.loaded;
     const issueText = node.loadError;
     return html`

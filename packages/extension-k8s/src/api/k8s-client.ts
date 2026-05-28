@@ -2,13 +2,14 @@ import { getConnectionSecrets } from 'extension-cloud/api';
 
 export interface K8sPersistData {
   serverUrl: string;
+  /** @deprecated Prefer {@link contexts}. */
   context?: string;
-  insecureSkipTlsVerify?: boolean;
+  /** Kubeconfig-style context names shown as scope nodes under the connection. */
+  contexts?: string[];
 }
 
 function normalizeServerUrl(url: string): string {
-  const trimmed = url.trim().replace(/\/$/, '');
-  return trimmed;
+  return url.trim().replace(/\/$/, '');
 }
 
 export function getK8sAuth(connectionId: string): { serverUrl: string; token: string } | undefined {
@@ -81,11 +82,18 @@ export async function listNamespaces(
   return data.items.map((i) => ({ name: i.metadata.name, uid: i.metadata.uid }));
 }
 
+export interface ListedPod {
+  name: string;
+  uid: string;
+  phase?: string;
+  containers: string[];
+}
+
 export async function listPods(
   connectionId: string,
   persist: K8sPersistData,
   namespace: string,
-): Promise<Array<{ name: string; uid: string; phase?: string }>> {
+): Promise<ListedPod[]> {
   const res = await k8sFetch(
     connectionId,
     persist,
@@ -94,13 +102,33 @@ export async function listPods(
   if (!res.ok) throw new Error(`list pods: ${res.status}`);
   const data = (await res.json()) as K8sList<{
     metadata: K8sObjectMeta;
-    status?: { phase?: string };
+    spec?: {
+      containers?: Array<{ name: string }>;
+      initContainers?: Array<{ name: string }>;
+    };
+    status?: {
+      phase?: string;
+      containerStatuses?: Array<{ name: string }>;
+      initContainerStatuses?: Array<{ name: string }>;
+    };
   }>;
-  return data.items.map((i) => ({
-    name: i.metadata.name,
-    uid: i.metadata.uid,
-    phase: i.status?.phase,
-  }));
+  return data.items.map((i) => {
+    const fromSpec = [
+      ...(i.spec?.initContainers?.map((c) => c.name) ?? []),
+      ...(i.spec?.containers?.map((c) => c.name) ?? []),
+    ];
+    const fromStatus = [
+      ...(i.status?.initContainerStatuses?.map((s) => s.name) ?? []),
+      ...(i.status?.containerStatuses?.map((s) => s.name) ?? []),
+    ];
+    const containers = [...new Set([...fromSpec, ...fromStatus].filter(Boolean))];
+    return {
+      name: i.metadata.name,
+      uid: i.metadata.uid,
+      phase: i.status?.phase,
+      containers,
+    };
+  });
 }
 
 export async function getPod(
@@ -123,9 +151,11 @@ export async function getPodLogs(
   persist: K8sPersistData,
   namespace: string,
   podName: string,
-  tailLines = 500,
+  options?: { tailLines?: number; container?: string },
 ): Promise<string> {
+  const tailLines = options?.tailLines ?? 500;
   const query = new URLSearchParams({ tailLines: String(tailLines) });
+  if (options?.container) query.set('container', options.container);
   const res = await k8sFetch(
     connectionId,
     persist,

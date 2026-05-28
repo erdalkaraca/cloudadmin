@@ -27,8 +27,26 @@ function persistOf(connection: CloudConnection): K8sPersistData {
   return {
     serverUrl: String(d.serverUrl ?? ''),
     context: d.context != null ? String(d.context) : undefined,
-    insecureSkipTlsVerify: Boolean(d.insecureSkipTlsVerify),
+    contexts: contextsOf(d),
   };
+}
+
+function contextsOf(persistData: Record<string, unknown>): string[] {
+  const raw = persistData.contexts;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return [...new Set(raw.map((c) => String(c).trim()).filter(Boolean))];
+  }
+  const single = persistData.context != null ? String(persistData.context).trim() : 'default';
+  return [single || 'default'];
+}
+
+function parseContextsField(value: string | undefined, previous?: string[]): string[] {
+  const parsed = (value ?? '')
+    .split(',')
+    .map((c) => c.trim())
+    .filter(Boolean);
+  if (parsed.length > 0) return [...new Set(parsed)];
+  return previous?.length ? previous : ['default'];
 }
 
 function nodeId(connectionId: string, ...parts: string[]): string {
@@ -53,22 +71,74 @@ async function ensureToken(connection: CloudConnection): Promise<void> {
   await setConnectionSecrets(connection.id, { token: token.trim() });
 }
 
-async function promptConnect(): Promise<CloudConnectResult> {
-  const values = await formDialogRequired({
-    label: 'Connect Kubernetes',
-    fields: [
-      { name: 'name', label: 'Connection name', value: 'Kubernetes cluster' },
-      { name: 'serverUrl', label: 'API server URL', value: 'https://127.0.0.1:6443', type: 'url' },
-      { name: 'token', label: 'Bearer token', type: 'password' },
-    ],
-  });
-  const persistData: K8sPersistData = { serverUrl: values.serverUrl, context: 'default' };
-  await validateK8sCredentials(persistData, values.token);
+function connectFormFields(connection?: CloudConnection) {
+  const persist = connection ? persistOf(connection) : undefined;
+  return [
+    { name: 'name', label: 'Connection name', value: connection?.name ?? 'Kubernetes cluster' },
+    {
+      name: 'serverUrl',
+      label: 'API server URL',
+      value: persist?.serverUrl ?? '',
+      type: 'url' as const,
+      placeholder: 'https://your-cluster:6443',
+    },
+    {
+      name: 'contexts',
+      label: 'Contexts',
+      value: (
+        persist?.contexts ??
+        (connection ? contextsOf(connection.persistData) : ['default', 'lab'])
+      ).join(', '),
+      placeholder: 'Comma-separated, e.g. default, lab',
+      required: false,
+    },
+    {
+      name: 'token',
+      label: 'Bearer token',
+      type: 'password' as const,
+      placeholder: connection ? 'Leave blank to keep current token' : undefined,
+      required: connection ? false : undefined,
+    },
+  ];
+}
+
+function resultFromForm(
+  values: Record<string, string>,
+  connection?: CloudConnection,
+): CloudConnectResult {
+  const persist = connection ? persistOf(connection) : undefined;
+  const contexts = parseContextsField(values.contexts, persist?.contexts);
+  const persistData: K8sPersistData = {
+    serverUrl: values.serverUrl,
+    contexts,
+    context: contexts[0],
+  };
+  const token = values.token?.trim();
   return {
     name: values.name,
     persistData: { ...persistData },
-    secrets: { token: values.token },
+    secrets: token ? { token } : undefined,
   };
+}
+
+async function promptConnect(): Promise<CloudConnectResult> {
+  const values = await formDialogRequired({
+    label: 'Connect Kubernetes',
+    fields: connectFormFields(),
+  });
+  const result = resultFromForm(values);
+  if (!result.secrets?.token) {
+    throw new Error('Bearer token is required.');
+  }
+  return result;
+}
+
+async function promptEditConnection(connection: CloudConnection): Promise<CloudConnectResult> {
+  const values = await formDialogRequired({
+    label: `Edit Kubernetes — ${connection.name}`,
+    fields: connectFormFields(connection),
+  });
+  return resultFromForm(values, connection);
 }
 
 const connectionContributor: CloudConnectionContributor = {
@@ -93,6 +163,7 @@ const connectionContributor: CloudConnectionContributor = {
     ];
   },
   connect: promptConnect,
+  editConnection: promptEditConnection,
   async restore(connection) {
     if (!getConnectionSecrets(connection.id)?.token) {
       return {
@@ -117,15 +188,15 @@ const treeContributor: CloudTreeContributor = {
     await ensureToken(connection);
     const persist = persistOf(connection);
     if (isUnderConnection(parent)) {
-      const ctx: CloudTreeNodeRef = {
-        nodeId: nodeId(connection.id, CloudTreeNodeKind.Scope, persist.context ?? 'default'),
+      return (persist.contexts ?? ['default']).map((ctxName) => ({
+        nodeId: nodeId(connection.id, CloudTreeNodeKind.Scope, ctxName),
         connectionId: connection.id,
         providerId: PROVIDER_ID,
         kind: CloudTreeNodeKind.Scope,
-        label: persist.context ?? 'default',
+        label: ctxName,
         hasChildren: true,
-      };
-      return [ctx];
+        meta: { kubeContext: ctxName },
+      }));
     }
     if (!parent) return [];
     if (parent.kind === CloudTreeNodeKind.Scope) {
@@ -143,16 +214,49 @@ const treeContributor: CloudTreeContributor = {
     }
     if (parent.kind === CloudTreeNodeKind.Group) {
       const namespace = String(parent.meta?.namespace ?? parent.label);
+      const podName = parent.meta?.podName;
+      if (typeof podName === 'string' && podName) {
+        const containers = Array.isArray(parent.meta?.containers)
+          ? (parent.meta.containers as unknown[]).map(String).filter(Boolean)
+          : [];
+        return containers.map((containerName) => ({
+          nodeId: nodeId(
+            connection.id,
+            CloudTreeNodeKind.Workload,
+            namespace,
+            podName,
+            containerName,
+          ),
+          connectionId: connection.id,
+          providerId: PROVIDER_ID,
+          kind: CloudTreeNodeKind.Workload,
+          label: containerName,
+          icon: 'cube',
+          hasChildren: false,
+          meta: {
+            namespace,
+            podName,
+            containerName,
+            phase: parent.meta?.phase,
+          },
+        }));
+      }
       const pods = await listPods(connection.id, persist, namespace);
       return pods.map((pod) => ({
-        nodeId: nodeId(connection.id, CloudTreeNodeKind.Workload, namespace, pod.name),
+        nodeId: nodeId(connection.id, CloudTreeNodeKind.Group, namespace, 'pod', pod.name),
         connectionId: connection.id,
         providerId: PROVIDER_ID,
-        kind: CloudTreeNodeKind.Workload,
+        kind: CloudTreeNodeKind.Group,
         label: pod.phase ? `${pod.name} (${pod.phase})` : pod.name,
-        hasChildren: false,
+        icon: 'box',
+        hasChildren: pod.containers.length > 0,
         resourceId: pod.uid,
-        meta: { namespace, phase: pod.phase, podName: pod.name },
+        meta: {
+          namespace,
+          podName: pod.name,
+          phase: pod.phase,
+          containers: pod.containers,
+        },
       }));
     }
     return [];

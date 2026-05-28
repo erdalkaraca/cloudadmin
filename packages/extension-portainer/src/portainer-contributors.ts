@@ -48,22 +48,55 @@ async function ensureApiKey(connection: CloudConnection): Promise<void> {
   await setConnectionSecrets(connection.id, { apiKey });
 }
 
+function connectFormFields(connection?: CloudConnection) {
+  const persist = connection ? persistOf(connection) : undefined;
+  return [
+    { name: 'name', label: 'Connection name', value: connection?.name ?? 'Portainer' },
+    {
+      name: 'serverUrl',
+      label: 'Portainer URL',
+      value: persist?.serverUrl ?? 'https://localhost:9443',
+      type: 'url' as const,
+    },
+    {
+      name: 'apiKey',
+      label: 'API key',
+      type: 'password' as const,
+      placeholder: connection ? 'Leave blank to keep current API key' : undefined,
+      required: connection ? false : undefined,
+    },
+  ];
+}
+
+function resultFromForm(
+  values: Record<string, string>,
+): CloudConnectResult {
+  const apiKey = values.apiKey?.trim();
+  return {
+    name: values.name,
+    persistData: { serverUrl: values.serverUrl } satisfies PortainerPersistData,
+    secrets: apiKey ? { apiKey } : undefined,
+  };
+}
+
 async function promptConnect(): Promise<CloudConnectResult> {
   const values = await formDialogRequired({
     label: 'Connect Portainer',
-    fields: [
-      { name: 'name', label: 'Connection name', value: 'Portainer' },
-      { name: 'serverUrl', label: 'Portainer URL', value: 'https://localhost:9443', type: 'url' },
-      { name: 'apiKey', label: 'API key', type: 'password' },
-    ],
+    fields: connectFormFields(),
   });
-  const persistData: PortainerPersistData = { serverUrl: values.serverUrl };
-  await validatePortainerCredentials(persistData, values.apiKey);
-  return {
-    name: values.name,
-    persistData: { serverUrl: persistData.serverUrl },
-    secrets: { apiKey: values.apiKey },
-  };
+  const result = resultFromForm(values);
+  if (!result.secrets?.apiKey) {
+    throw new Error('API key is required.');
+  }
+  return result;
+}
+
+async function promptEditConnection(connection: CloudConnection): Promise<CloudConnectResult> {
+  const values = await formDialogRequired({
+    label: `Edit Portainer — ${connection.name}`,
+    fields: connectFormFields(connection),
+  });
+  return resultFromForm(values);
 }
 
 const connectionContributor: CloudConnectionContributor = {
@@ -88,6 +121,7 @@ const connectionContributor: CloudConnectionContributor = {
     ];
   },
   connect: promptConnect,
+  editConnection: promptEditConnection,
   async restore(connection) {
     if (!getConnectionSecrets(connection.id)?.apiKey) {
       return {

@@ -16,6 +16,7 @@ import {
   setConnectionSecrets,
 } from './session-secrets';
 import { TOPIC_CLOUD_CONNECTIONS_CHANGED } from './api';
+import { toastCloudError } from './cloud-toast';
 
 function newConnectionId(): string {
   return `conn-${crypto.randomUUID()}`;
@@ -63,6 +64,33 @@ class CloudConnectionService {
     this.notifyChanged();
   }
 
+  private async applyConnectionResult(
+    connection: CloudConnection,
+    result: { name: string; persistData: Record<string, unknown>; secrets?: Record<string, string> },
+  ): Promise<void> {
+    const contributor = this.connectionContributors.get(connection.providerId);
+    if (!contributor) return;
+    connection.name = result.name;
+    connection.persistData = result.persistData;
+    if (result.secrets) await setConnectionSecrets(connection.id, result.secrets);
+    connection.status = 'connecting';
+    connection.errorMessage = undefined;
+    this.notifyChanged();
+    try {
+      const restored = await contributor.restore(connection);
+      Object.assign(connection, restored);
+      if (connection.status === 'connecting') {
+        connection.status = 'connected';
+      }
+    } catch (err) {
+      connection.status = 'error';
+      connection.errorMessage = err instanceof Error ? err.message : String(err);
+      toastCloudError(err);
+    }
+    await this.saveConnections();
+    this.notifyChanged();
+  }
+
   async connectProvider(providerId: string): Promise<CloudConnection | undefined> {
     const contributor = this.connectionContributors.get(providerId);
     if (!contributor) return undefined;
@@ -71,10 +99,25 @@ class CloudConnectionService {
       providerId,
       result.name,
       result.persistData,
-      'connected',
+      'connecting',
     );
-    if (result.secrets) await setConnectionSecrets(connection.id, result.secrets);
+    await this.applyConnectionResult(connection, result);
     return connection;
+  }
+
+  async editConnection(connectionId: string): Promise<void> {
+    const connection = this.getConnection(connectionId);
+    if (!connection) return;
+    const contributor = this.connectionContributors.get(connection.providerId);
+    if (!contributor?.editConnection) {
+      throw new Error('This provider does not support editing connections.');
+    }
+    const result = await contributor.editConnection(connection);
+    await this.applyConnectionResult(connection, result);
+  }
+
+  supportsEditConnection(providerId: string): boolean {
+    return Boolean(this.connectionContributors.get(providerId)?.editConnection);
   }
 
   async addConnection(

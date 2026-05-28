@@ -63,10 +63,18 @@ export interface CloudTreeActionContext {
 
 export type WorkloadLifecycleOp = 'start' | 'stop' | 'restart';
 
-export type WorkloadEditorTab = 'overview' | 'logs' | 'inspect';
+export type WorkloadEditorTab = 'overview' | 'logs' | 'config' | 'inspect';
+
+export type WorkloadConfigLanguage = 'json' | 'yaml' | 'dockerfile' | 'plaintext';
+
+export interface WorkloadConfigContent {
+  text: string;
+  language?: WorkloadConfigLanguage;
+}
 
 export interface WorkloadCapabilities {
   logs?: boolean;
+  config?: boolean;
   inspect?: boolean;
   lifecycle?: WorkloadLifecycleOp[];
 }
@@ -80,7 +88,11 @@ export interface CloudWorkloadHandler {
   providerId: string;
   getCapabilities(context: CloudTreeActionContext): WorkloadCapabilities;
   getStatus?(context: CloudTreeActionContext): Promise<WorkloadStatus>;
-  fetchLogs?(context: CloudTreeActionContext, options?: { tail?: number }): Promise<string>;
+  fetchLogs?(
+    context: CloudTreeActionContext,
+    options?: { tail?: number; container?: string },
+  ): Promise<string>;
+  fetchConfig?(context: CloudTreeActionContext): Promise<WorkloadConfigContent>;
   fetchInspect?(context: CloudTreeActionContext): Promise<unknown>;
   lifecycle?(
     context: CloudTreeActionContext,
@@ -101,6 +113,8 @@ export interface CloudConnectionContributor {
   label: string;
   icon: string;
   connect(): Promise<CloudConnectResult>;
+  /** Edit persisted settings and optional secrets for an existing connection. */
+  editConnection?(connection: CloudConnection): Promise<CloudConnectResult>;
   restore(connection: CloudConnection): Promise<CloudConnection>;
   disconnect(connectionId: string): Promise<void>;
   rename?(connectionId: string, name: string): Promise<void>;

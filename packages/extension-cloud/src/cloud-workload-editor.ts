@@ -10,6 +10,7 @@ import {
   ref,
   state,
 } from '@eclipse-docks/core/externals/lit';
+import type { PropertyValues } from '@eclipse-docks/core/externals/lit';
 import { logsTextToTabular } from './workload-logs-tabular';
 import { cloudConnectionService } from './cloud-connection-service';
 import { cloudWorkloadRegistry } from './cloud-workload-registry';
@@ -37,6 +38,10 @@ export class CloudAdminWorkloadEditor extends DocksPart {
   @state() private logsText = '';
   @state() private logsError = '';
   @state() private logsLoading = false;
+  @state() private configText = '';
+  @state() private configLanguage = 'json';
+  @state() private configError = '';
+  @state() private configLoading = false;
   @state() private inspectText = '';
   @state() private inspectError = '';
   @state() private inspectLoading = false;
@@ -48,6 +53,19 @@ export class CloudAdminWorkloadEditor extends DocksPart {
     super.connectedCallback();
     this.activeTab = this.resolveInitialTab();
     this.ensureTabLoaded(this.activeTab);
+  }
+
+  protected override updated(changed: PropertyValues): void {
+    super.updated(changed);
+    if (!changed.has('editorInput')) return;
+    this.logsText = '';
+    this.logsError = '';
+    this.configText = '';
+    this.configError = '';
+    this.inspectText = '';
+    this.inspectError = '';
+    this.status = undefined;
+    this.statusError = '';
   }
 
   private get context(): CloudTreeActionContext {
@@ -69,6 +87,7 @@ export class CloudAdminWorkloadEditor extends DocksPart {
     const requested = this.editorInput.initialTab ?? 'overview';
     const caps = this.handler?.getCapabilities(this.context) ?? {};
     if (requested === 'logs' && !caps.logs) return 'overview';
+    if (requested === 'config' && !caps.config) return 'overview';
     if (requested === 'inspect' && !caps.inspect) return 'overview';
     return requested;
   }
@@ -76,6 +95,9 @@ export class CloudAdminWorkloadEditor extends DocksPart {
   private ensureTabLoaded(tab: WorkloadEditorTab): void {
     if (tab === 'logs' && !this.logsText && !this.logsError && !this.logsLoading) {
       void this.loadLogs();
+    }
+    if (tab === 'config' && !this.configText && !this.configError && !this.configLoading) {
+      void this.loadConfig();
     }
     if (tab === 'inspect' && !this.inspectText && !this.inspectError && !this.inspectLoading) {
       void this.loadInspect();
@@ -86,21 +108,29 @@ export class CloudAdminWorkloadEditor extends DocksPart {
   }
 
   private inspectMonacoRef = createRef<HTMLElement & { layout?: () => void }>();
+  private configMonacoRef = createRef<HTMLElement & { layout?: () => void }>();
 
-  private async layoutInspectEditor(): Promise<void> {
+  private async layoutMonacoEditor(
+    editorRef: typeof this.inspectMonacoRef,
+  ): Promise<void> {
     await this.updateComplete;
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-    this.inspectMonacoRef.value?.layout?.();
+    editorRef.value?.layout?.();
   }
 
   private onTabShow(event: CustomEvent<{ name: string }>): void {
     const name = event.detail?.name as WorkloadEditorTab;
-    if (name !== 'overview' && name !== 'logs' && name !== 'inspect') return;
+    if (name !== 'overview' && name !== 'logs' && name !== 'config' && name !== 'inspect') {
+      return;
+    }
     this.activeTab = name;
     this.ensureTabLoaded(name);
+    if (name === 'config') {
+      void this.layoutMonacoEditor(this.configMonacoRef);
+    }
     if (name === 'inspect') {
-      void this.layoutInspectEditor();
+      void this.layoutMonacoEditor(this.inspectMonacoRef);
     }
   }
 
@@ -136,6 +166,26 @@ export class CloudAdminWorkloadEditor extends DocksPart {
     }
   }
 
+  private async loadConfig(): Promise<void> {
+    const handler = this.handler;
+    if (!handler?.fetchConfig) return;
+    this.configLoading = true;
+    this.configError = '';
+    try {
+      const content = await handler.fetchConfig(this.context);
+      this.configText = content.text;
+      this.configLanguage = content.language ?? 'json';
+    } catch (err) {
+      this.configText = '';
+      this.configError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this.configLoading = false;
+      if (this.activeTab === 'config') {
+        void this.layoutMonacoEditor(this.configMonacoRef);
+      }
+    }
+  }
+
   private async loadInspect(): Promise<void> {
     const handler = this.handler;
     if (!handler?.fetchInspect) return;
@@ -150,7 +200,7 @@ export class CloudAdminWorkloadEditor extends DocksPart {
     } finally {
       this.inspectLoading = false;
       if (this.activeTab === 'inspect') {
-        void this.layoutInspectEditor();
+        void this.layoutMonacoEditor(this.inspectMonacoRef);
       }
     }
   }
@@ -210,6 +260,17 @@ export class CloudAdminWorkloadEditor extends DocksPart {
           appearance="plain"
           ?disabled=${this.logsLoading}
           .action=${() => void this.loadLogs()}
+        ></docks-command>
+      `;
+    }
+    if (this.activeTab === 'config' && this.capabilities.config) {
+      return html`
+        <docks-command
+          icon="arrows-rotate"
+          title="Refresh config"
+          appearance="plain"
+          ?disabled=${this.configLoading}
+          .action=${() => void this.loadConfig()}
         ></docks-command>
       `;
     }
@@ -286,28 +347,37 @@ export class CloudAdminWorkloadEditor extends DocksPart {
     `;
   }
 
-  private renderInspectPanel() {
-    if (!this.capabilities.inspect) {
-      return html`<p class="muted">Inspect is not available for this workload.</p>`;
+  private renderMonacoPanel(options: {
+    enabled: boolean;
+    unavailableMessage: string;
+    tab: WorkloadEditorTab;
+    loading: boolean;
+    error: string;
+    text: string;
+    language: string;
+    editorRef: ReturnType<typeof createRef<HTMLElement & { layout?: () => void }>>;
+  }) {
+    if (!options.enabled) {
+      return html`<p class="muted">${options.unavailableMessage}</p>`;
     }
     const showEditor =
-      this.activeTab === 'inspect' &&
-      !this.inspectLoading &&
-      !this.inspectError &&
-      !!this.inspectText;
+      this.activeTab === options.tab &&
+      !options.loading &&
+      !options.error &&
+      !!options.text;
     return html`
-      <div class="panel-body panel-body--inspect">
-        ${this.inspectLoading
+      <div class="panel-body panel-body--monaco">
+        ${options.loading
           ? html`<p class="muted">Loading…</p>`
-          : this.inspectError
-            ? html`<p class="error-text">${this.inspectError}</p>`
+          : options.error
+            ? html`<p class="error-text">${options.error}</p>`
             : showEditor
               ? html`
-                  <div class="inspect-editor-host">
+                  <div class="monaco-editor-host">
                     <docks-monaco-widget
-                      ${ref(this.inspectMonacoRef)}
-                      .value=${this.inspectText}
-                      language="json"
+                      ${ref(options.editorRef)}
+                      .value=${options.text}
+                      language=${options.language}
                       .readOnly=${true}
                       auto-layout
                     ></docks-monaco-widget>
@@ -316,6 +386,32 @@ export class CloudAdminWorkloadEditor extends DocksPart {
               : nothing}
       </div>
     `;
+  }
+
+  private renderConfigPanel() {
+    return this.renderMonacoPanel({
+      enabled: Boolean(this.capabilities.config),
+      unavailableMessage: 'Config is not available for this workload.',
+      tab: 'config',
+      loading: this.configLoading,
+      error: this.configError,
+      text: this.configText,
+      language: this.configLanguage,
+      editorRef: this.configMonacoRef,
+    });
+  }
+
+  private renderInspectPanel() {
+    return this.renderMonacoPanel({
+      enabled: Boolean(this.capabilities.inspect),
+      unavailableMessage: 'Inspect is not available for this workload.',
+      tab: 'inspect',
+      loading: this.inspectLoading,
+      error: this.inspectError,
+      text: this.inspectText,
+      language: 'json',
+      editorRef: this.inspectMonacoRef,
+    });
   }
 
   protected renderContent() {
@@ -330,11 +426,15 @@ export class CloudAdminWorkloadEditor extends DocksPart {
         >
           <wa-tab slot="nav" panel="overview">Overview</wa-tab>
           ${caps.logs ? html`<wa-tab slot="nav" panel="logs">Logs</wa-tab>` : nothing}
+          ${caps.config ? html`<wa-tab slot="nav" panel="config">Config</wa-tab>` : nothing}
           ${caps.inspect ? html`<wa-tab slot="nav" panel="inspect">Inspect</wa-tab>` : nothing}
 
           <wa-tab-panel name="overview">${this.renderOverview()}</wa-tab-panel>
           ${caps.logs
             ? html`<wa-tab-panel name="logs">${this.renderLogsPanel()}</wa-tab-panel>`
+            : nothing}
+          ${caps.config
+            ? html`<wa-tab-panel name="config">${this.renderConfigPanel()}</wa-tab-panel>`
             : nothing}
           ${caps.inspect
             ? html`<wa-tab-panel name="inspect">${this.renderInspectPanel()}</wa-tab-panel>`
@@ -430,7 +530,15 @@ export class CloudAdminWorkloadEditor extends DocksPart {
         overflow: hidden;
       }
 
-      .inspect-editor-host {
+      .panel-body--monaco {
+        display: flex;
+        flex-direction: column;
+        flex: 1 1 0;
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .monaco-editor-host {
         display: flex;
         flex-direction: column;
         flex: 1 1 0;
@@ -439,7 +547,7 @@ export class CloudAdminWorkloadEditor extends DocksPart {
       }
 
       .panel-body docks-data-table,
-      .inspect-editor-host docks-monaco-widget {
+      .monaco-editor-host docks-monaco-widget {
         flex: 1 1 0;
         min-height: 0;
         width: 100%;

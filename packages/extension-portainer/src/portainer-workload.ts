@@ -2,6 +2,7 @@ import type {
   CloudTreeActionContext,
   CloudWorkloadHandler,
   WorkloadCapabilities,
+  WorkloadConfigContent,
   WorkloadLifecycleOp,
   WorkloadStatus,
 } from 'extension-cloud/api';
@@ -12,6 +13,7 @@ import {
   inspectContainer,
   type PortainerPersistData,
 } from './api/portainer-client';
+import { configJsonFromInspect, dockerfileFromInspect } from './portainer-config';
 
 function persistOf(connection: CloudTreeActionContext['connection']): PortainerPersistData {
   return { serverUrl: String(connection.persistData.serverUrl ?? '') };
@@ -44,6 +46,7 @@ export const portainerWorkloadHandler: CloudWorkloadHandler = {
     const state = normalizedState(context);
     return {
       logs: true,
+      config: true,
       inspect: true,
       lifecycle: lifecycleForState(state),
     };
@@ -67,6 +70,21 @@ export const portainerWorkloadHandler: CloudWorkloadHandler = {
       containerId(context),
       options?.tail ?? 500,
     );
+  },
+
+  async fetchConfig(context): Promise<WorkloadConfigContent> {
+    const persist = persistOf(context.connection);
+    const inspect = await inspectContainer(
+      context.connection.id,
+      persist,
+      endpointId(context),
+      containerId(context),
+    );
+    const dockerfile = dockerfileFromInspect(inspect);
+    if (dockerfile) {
+      return { language: 'dockerfile', text: dockerfile };
+    }
+    return { language: 'json', text: configJsonFromInspect(inspect) };
   },
 
   async fetchInspect(context) {

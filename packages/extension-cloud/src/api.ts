@@ -7,6 +7,8 @@ export { openWorkloadEditor } from './cloud-workload-opener';
 export type {
   CloudWorkloadHandler,
   WorkloadCapabilities,
+  WorkloadConfigContent,
+  WorkloadConfigLanguage,
   WorkloadEditorTab,
   WorkloadLifecycleOp,
   WorkloadStatus,
