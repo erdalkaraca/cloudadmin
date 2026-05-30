@@ -71,33 +71,18 @@ export class CloudWorkloadTabInspect extends CloudWorkloadTabPart {
       return this.renderLoading();
     }
     return html`
-      <div class="monaco-editor-host">
-        <docks-monaco-widget
-          ${ref(this.monacoRef)}
-          .value=${this.text}
-          language="json"
-          .readOnly=${true}
-          auto-layout
-        ></docks-monaco-widget>
-      </div>
+      <docks-monaco-widget
+        ${ref(this.monacoRef)}
+        .value=${this.text}
+        language="json"
+        .readOnly=${true}
+        auto-layout
+      ></docks-monaco-widget>
     `;
   }
 
   static styles = [
     css`
-      .monaco-editor-host {
-        flex: 1 1 0;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-      }
-
-      docks-monaco-widget {
-        flex: 1 1 0;
-        min-height: 0;
-        height: 100%;
-      }
-
       .error-text {
         color: var(--wa-color-danger-600, #dc2626);
         padding: var(--wa-space-m);
