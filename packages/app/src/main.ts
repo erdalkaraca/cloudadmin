@@ -31,6 +31,10 @@ const appRoot = document.getElementById('app-root') ?? document.body;
 appLoaderService.registerApp(
   {
     name: 'CloudAdmin',
+    layout: {
+      id: 'standard',
+      props: { 'show-aux-sidebar': "false" },
+    },
     remaps: SIDEBAR_TAB_REMAPS,
     extensions: [
       '@eclipse-docks/extension-utils',
@@ -45,6 +49,7 @@ appLoaderService.registerApp(
       '@eclipse-docks/extension-settings-tree',
       '@eclipse-docks/extension-memory-usage',
       'extension-cloud',
+      'extension-companion',
       'extension-k8s',
       'extension-portainer',
     ],

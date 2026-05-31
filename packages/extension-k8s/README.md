@@ -9,7 +9,12 @@
 
 ## Purpose
 
-Kubernetes cluster connections in the unified Cloud tree. Inventory and safe operations run in the **browser** via the Kubernetes API (no Companion for MVP).
+Kubernetes cluster connections in the unified Cloud tree. The extension now contributes two separate connection types:
+
+1. `Kubernetes (Companion + kubectl)` (`providerId: k8s`)
+2. `Kubernetes (JS API + Bearer Token)` (`providerId: k8s-bearer`)
+
+Both types share the same tree hierarchy and workload viewer. The companion type uses `kubectl proxy`, while the bearer type uses direct browser `fetch` calls with an Authorization header.
 
 ## Prerequisites
 
@@ -26,10 +31,10 @@ When `extension-cloud` exists:
 
 ### 2. Connection flow (`connect` / `restore`)
 
-- **Connect UI:** URL + bearer token, or workspace kubeconfig path (file picker / path under workspace).
-- **Persist** in `.cloudadmin/connections.json` only: `connectionId`, `name`, `providerId`, `persistData` (e.g. `kubeconfigPath`, `context`, `serverUrl` — **no** tokens or certs).
+- **Connect UI:** URL first, with optional context list and discovered server dropdown. Companion-backed kubectl uses default kubeconfig resolution.
+- **Persist** in `.cloudadmin/connections.json` only: `connectionId`, `name`, `providerId`, `persistData` (e.g. `context`, `contexts`, `serverUrl` — **no** tokens or certs).
 - **Secrets:** keep credentials in session memory or OS/browser storage per R-SEC7.1; never write to `connections.json`.
-- **Restore:** validate kubeconfig/context still exists; mark root node error state if unreachable (PROV13.13).
+- **Restore:** validate current context/cluster reachability; mark root node error state if unreachable (PROV13.13).
 
 ### 3. Tree hierarchy (PROV13.10)
 

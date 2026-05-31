@@ -9,12 +9,13 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "bash scripts/with-node.sh npm run dev -w cloudadmin",
-    "build": "bash scripts/with-node.sh npm run build -w cloudadmin",
-    "preview": "bash scripts/with-node.sh npm run preview -w cloudadmin",
-    "install:deps": "bash scripts/with-node.sh npm install"
+    "dev": "npm run dev -w cloudadmin",
+    "build": "npm run build -w cloudadmin",
+    "preview": "npm run preview -w cloudadmin"
   },
   "devDependencies": {
     "@rolldown/binding-linux-x64-gnu": "^1.0.2"
+  },
+  "dependencies": {
   }
 }

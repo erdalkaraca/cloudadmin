@@ -17,6 +17,10 @@ export default defineConfig(({ mode }) => {
   return {
   root: __dirname,
   base: basePath,
+  assetsInclude: [
+    '**/companion/vendor/bin/cloudadmin-companion',
+    '**/companion/vendor/bin/cloudadmin-companion.exe',
+  ],
   resolve: {},
   server: {
     watch: {

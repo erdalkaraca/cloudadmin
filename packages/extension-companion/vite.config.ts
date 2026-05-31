@@ -8,10 +8,15 @@ const isExternal = (id: string): boolean =>
   !id.startsWith('./') && !id.startsWith('../') && !(path.isAbsolute(id) && id.includes('/src/'));
 
 export default defineConfig({
+  assetsInclude: [
+    '**/companion/vendor/bin/cloudadmin-companion',
+    '**/companion/vendor/bin/cloudadmin-companion.exe',
+  ],
   build: {
     lib: { entry: path.resolve(__dirname, 'src/index.ts'), formats: ['es'], fileName: 'index' },
     rolldownOptions: { external: isExternal, output: { format: 'es' } },
     outDir: 'dist',
+    assetsInlineLimit: 0,
     sourcemap: true,
     minify: false,
   },

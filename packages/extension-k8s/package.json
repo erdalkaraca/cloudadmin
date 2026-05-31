@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@eclipse-docks/core": "^0.x",
-    "extension-cloud": "*"
+    "extension-cloud": "*",
+    "extension-companion": "*"
   },
   "devDependencies": {
     "typescript": "^6.0.0",

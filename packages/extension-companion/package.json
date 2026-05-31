@@ -15,13 +15,19 @@
   },
   "dependencies": {
     "@eclipse-docks/core": "^0.x",
-    "extension-cloud": "*"
+    "@eclipse-docks/extension-catalog": "^0.x"
   },
   "devDependencies": {
     "typescript": "^6.0.0",
     "vite": "^8.0.0"
   },
   "scripts": {
-    "build": "vite build"
+    "build": "vite build",
+    "companion:dev": "bash -lc 'set -euo pipefail; export CARGO_INCREMENTAL=1 CARGO_PROFILE_DEV_INCREMENTAL=true; cargo watch --version >/dev/null 2>&1 || cargo install cargo-watch; cd companion; exec cargo watch -w src -w Cargo.toml -x run'",
+    "companion:build": "npm run companion:build:all",
+    "companion:build:linux": "bash -lc 'set -euo pipefail; cargo build --release --manifest-path companion/Cargo.toml; mkdir -p companion/vendor/bin; cp companion/target/release/cloudadmin-companion companion/vendor/bin/cloudadmin-companion.new; chmod +x companion/vendor/bin/cloudadmin-companion.new; mv -f companion/vendor/bin/cloudadmin-companion.new companion/vendor/bin/cloudadmin-companion'",
+    "companion:build:windows": "bash -lc 'set -euo pipefail; rustup target add x86_64-pc-windows-gnu >/dev/null; cargo build --release --manifest-path companion/Cargo.toml --target x86_64-pc-windows-gnu; mkdir -p companion/vendor/bin; cp companion/target/x86_64-pc-windows-gnu/release/cloudadmin-companion.exe companion/vendor/bin/cloudadmin-companion.exe.new; chmod +x companion/vendor/bin/cloudadmin-companion.exe.new; mv -f companion/vendor/bin/cloudadmin-companion.exe.new companion/vendor/bin/cloudadmin-companion.exe'",
+    "companion:build:all": "bash -lc 'set -euo pipefail; npm run companion:build:linux; npm run companion:build:windows'",
+    "companion:run": "bash -lc 'set -euo pipefail; test -x companion/vendor/bin/cloudadmin-companion || { echo \"Companion binary missing at companion/vendor/bin/cloudadmin-companion\"; echo \"Run: npm run companion:build\"; exit 1; }; exec companion/vendor/bin/cloudadmin-companion'"
   }
 }

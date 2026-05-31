@@ -1,0 +1,13 @@
+# Node package artifacts
+node_modules/
+
+# Rust companion build artifacts
+target/
+companion/target/
+companion/vendor/bin/cloudadmin-companion.new
+companion/vendor/bin/cloudadmin-companion.exe.new
+
+# Companion-managed kubectl artifacts
+companion/vendor/bin/kubectl
+companion/vendor/bin/kubectl.exe
+companion/vendor/bin/kubectl-*.version
