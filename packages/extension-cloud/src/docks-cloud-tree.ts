@@ -42,6 +42,21 @@ interface CloudTreeNodeData {
   connection: CloudConnection;
 }
 
+function errorChildNode(message: string): TreeNode {
+  return {
+    label: message,
+    icon: 'triangle-exclamation',
+    leaf: true,
+    children: [],
+    loaded: true,
+  };
+}
+
+function canOpenInEditor(ref: CloudTreeNodeRef): boolean {
+  if (ref.kind === CloudTreeNodeKind.Workload) return true;
+  return Boolean(ref.meta && (ref.meta.openInEditor === true || ref.meta.openInEditor === 'true'));
+}
+
 function refreshLabelForKind(kind: CloudTreeNodeKind): string {
   switch (kind) {
     case CloudTreeNodeKind.Connection:
@@ -106,20 +121,18 @@ export class DocksCloudTree extends DocksPart {
       connectionId: connection.id,
       providerId: connection.providerId,
       kind: CloudTreeNodeKind.Connection,
-      label:
-        connection.status === 'error'
-          ? `${connection.name} (error)`
-          : connection.name,
+      label: connection.name,
       hasChildren: true,
     };
+    const hasError = Boolean(connection.errorMessage?.trim());
     return {
       data: { cloudRef, connection } satisfies CloudTreeNodeData,
       label: cloudRef.label,
       icon: resolveTreeIcon(cloudRef, connection),
       leaf: false,
-      children: [],
-      loaded: false,
-      loadError: connection.errorMessage,
+      children: hasError ? [errorChildNode(String(connection.errorMessage))] : [],
+      loaded: hasError,
+      loadError: undefined,
     };
   }
 
@@ -183,7 +196,7 @@ export class DocksCloudTree extends DocksPart {
           }),
       });
     }
-    if (cloudRef.kind === CloudTreeNodeKind.Workload) {
+    if (canOpenInEditor(cloudRef)) {
       actions.push({
         id: 'cloudadmin.shell.open-workload',
         label: 'Open',
@@ -352,6 +365,8 @@ export class DocksCloudTree extends DocksPart {
       }
     } catch (err) {
       node.loadError = err instanceof Error ? err.message : String(err);
+      node.children = [errorChildNode(node.loadError)];
+      node.loadError = undefined;
       node.loaded = true;
       if (render) {
         this.requestUpdate();
@@ -388,7 +403,6 @@ export class DocksCloudTree extends DocksPart {
     if (!node) return html``;
     // Same rule as filebrowser: lazy only until children have been fetched once.
     const isLazy = !node.leaf && !node.loaded;
-    const issueText = node.loadError;
     return html`
       <wa-tree-item
         @dblclick=${this.nobubble((e: Event) => this.onItemDblClicked(e, node))}
@@ -404,9 +418,6 @@ export class DocksCloudTree extends DocksPart {
               <span class="tree-label-text">${node.label}</span>
             </span>
           </div>
-          ${issueText
-            ? html`<div class="tree-item-detail-row tree-item-error-text">${issueText}</div>`
-            : nothing}
         </div>
         ${node.children?.map((child) => this.createTreeItems(child))}
       </wa-tree-item>
@@ -415,11 +426,7 @@ export class DocksCloudTree extends DocksPart {
 
   private onItemDblClicked(event: Event, node: TreeNode): void {
     const data = node.data as CloudTreeNodeData | undefined;
-    if (
-      data &&
-      node.leaf &&
-      data.cloudRef.kind === CloudTreeNodeKind.Workload
-    ) {
+    if (data && node.leaf && canOpenInEditor(data.cloudRef)) {
       void runCloudAction(() =>
         openWorkloadEditor(data.connection, data.cloudRef),
       );

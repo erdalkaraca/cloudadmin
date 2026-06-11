@@ -7,6 +7,7 @@ extensionRegistry.registerExtension({
   description: 'Kubernetes cloud provider (stub — see README)',
   loader: () => import('./k8s-extension-loader'),
   icon: 'diagram-project',
+  dependencies: ['@eclipse-docks/extension-terminal'],
 });
 
 export { COMMAND_NAMESPACE, PROVIDER_DISPLAY_NAME, PROVIDER_ID } from './provider';

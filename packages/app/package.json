@@ -10,8 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@eclipse-docks/core": "^0.7.109",
+    "@eclipse-docks/core": "^0.x",
     "@eclipse-docks/extension-ai-system": "^0.x",
+    "@eclipse-docks/extension-terminal": "^0.x",
     "@eclipse-docks/extension-catalog": "^0.x",
     "@eclipse-docks/extension-dataviewer": "^0.x",
     "@eclipse-docks/extension-command-palette": "^0.x",

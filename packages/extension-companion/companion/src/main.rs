@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use axum::{
-    extract::State,
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query, State,
+    },
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -16,7 +19,11 @@ use std::{
     process::Stdio,
     sync::Arc,
 };
-use tokio::{process::Command, sync::Mutex};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    sync::Mutex,
+};
 
 #[derive(Clone)]
 struct AppState {
@@ -124,6 +131,29 @@ struct ToolInstallRequest {
     force: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct K8sExecRequest {
+    requester: Option<String>,
+    kubeconfig_path: Option<String>,
+    context: String,
+    namespace: String,
+    pod: String,
+    container: String,
+    command: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TerminalResizeEnvelope {
+    resize: Option<TerminalResize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TerminalResize {
+    cols: u16,
+    rows: u16,
+}
+
 fn log_info(message: &str) {
     eprintln!("[cloudadmin-companion] {message}");
 }
@@ -183,6 +213,7 @@ async fn main() -> Result<()> {
         .route("/tools/exec", post(execute_tool).options(preflight))
         .route("/tools/install", post(install_tool).options(preflight))
         .route("/k8s/proxy", post(proxy_kubernetes).options(preflight))
+        .route("/k8s/exec", get(exec_kubernetes))
         .with_state(state);
 
     let addr: SocketAddr = listen
@@ -271,6 +302,63 @@ async fn proxy_kubernetes(
             response.headers_mut().insert(header::CONTENT_TYPE, value);
         }
     }
+    append_cors_headers(response.headers_mut(), &headers);
+    Ok(response)
+}
+
+async fn exec_kubernetes(
+    State(state): State<AppState>,
+    ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    Query(request): Query<K8sExecRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let origin = request_origin(&headers).to_string();
+    log_info(&format!(
+        "GET /k8s/exec origin={} context={} namespace={} pod={} container={}",
+        origin, request.context, request.namespace, request.pod, request.container,
+    ));
+    if !is_allowed_origin(&state, &headers) {
+        log_info(&format!("forbidden origin on GET /k8s/exec origin={origin}"));
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    let requester = request
+        .requester
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("extension-k8s")
+        .to_string();
+
+    validate_exec_request(&request).map_err(|error| {
+        log_info(&format!("invalid k8s exec request: {error}"));
+        StatusCode::BAD_REQUEST
+    })?;
+
+    let command = parse_exec_command(request.command.as_deref()).map_err(|error| {
+        log_info(&format!("invalid k8s exec command: {error}"));
+        StatusCode::BAD_REQUEST
+    })?;
+    let args = build_kubectl_exec_args(&request, &command);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+
+    ensure_tool_request_allowed(&state, &requester, "kubectl", &arg_refs)
+        .await
+        .map_err(|error| {
+            log_info(&format!("k8s exec policy denied: {error}"));
+            StatusCode::FORBIDDEN
+        })?;
+
+    let kubectl_bin = ensure_kubectl_available(&state).await.map_err(|error| {
+        log_info(&format!("failed to ensure kubectl for k8s exec: {error}"));
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    let mut response = ws.on_upgrade(move |socket| async move {
+        if let Err(error) = handle_exec_socket(socket, kubectl_bin, request, command).await {
+            log_info(&format!("k8s exec session failed: {error}"));
+        }
+    }).into_response();
     append_cors_headers(response.headers_mut(), &headers);
     Ok(response)
 }
@@ -440,6 +528,162 @@ async fn install_tool(
     let mut http_response = Json(response).into_response();
     append_cors_headers(http_response.headers_mut(), &headers);
     Ok(http_response)
+}
+
+fn validate_exec_request(request: &K8sExecRequest) -> Result<()> {
+    if request.context.trim().is_empty()
+        || request.namespace.trim().is_empty()
+        || request.pod.trim().is_empty()
+        || request.container.trim().is_empty()
+    {
+        anyhow::bail!("context, namespace, pod, and container are required");
+    }
+    Ok(())
+}
+
+fn parse_exec_command(raw: Option<&str>) -> Result<Vec<String>> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(vec!["/bin/sh".to_string()]);
+    };
+
+    let parsed = serde_json::from_str::<Vec<String>>(raw).context("command must be a JSON string array")?;
+    let command = parsed
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+
+    if command.is_empty() {
+        anyhow::bail!("command must not be empty");
+    }
+
+    Ok(command)
+}
+
+fn build_kubectl_exec_args(request: &K8sExecRequest, command: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "exec".to_string(),
+        "-i".to_string(),
+        request.pod.trim().to_string(),
+        "-n".to_string(),
+        request.namespace.trim().to_string(),
+        "--context".to_string(),
+        request.context.trim().to_string(),
+        "-c".to_string(),
+        request.container.trim().to_string(),
+        "--".to_string(),
+    ];
+    args.extend(command.iter().cloned());
+    args
+}
+
+async fn handle_exec_socket(
+    mut socket: WebSocket,
+    kubectl_bin: String,
+    request: K8sExecRequest,
+    command: Vec<String>,
+) -> Result<()> {
+    let args = build_kubectl_exec_args(&request, &command);
+    let mut child = Command::new(&kubectl_bin);
+    child
+        .args(args.iter().map(String::as_str))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(path) = request
+        .kubeconfig_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        child.arg(format!("--kubeconfig={path}"));
+    }
+
+    let mut child = child
+        .spawn()
+        .with_context(|| format!("failed to spawn {} exec", kubectl_bin))?;
+
+    let mut stdin = child.stdin.take().context("kubectl exec stdin missing")?;
+    let mut stdout = child.stdout.take().context("kubectl exec stdout missing")?;
+    let mut stderr = child.stderr.take().context("kubectl exec stderr missing")?;
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+    let mut stdout_buf = [0u8; 8192];
+    let mut stderr_buf = [0u8; 8192];
+
+    loop {
+        tokio::select! {
+            message = socket.recv() => {
+                match message {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(envelope) = serde_json::from_str::<TerminalResizeEnvelope>(&text) {
+                            if let Some(size) = envelope.resize {
+                                log_info(&format!(
+                                    "ignoring terminal resize cols={} rows={} (pty not yet enabled)",
+                                    size.cols,
+                                    size.rows
+                                ));
+                                continue;
+                            }
+                        }
+                        stdin.write_all(text.as_bytes()).await?;
+                        stdin.flush().await?;
+                    }
+                    Some(Ok(Message::Binary(data))) => {
+                        stdin.write_all(&data).await?;
+                        stdin.flush().await?;
+                    }
+                    Some(Ok(Message::Ping(data))) => {
+                        socket.send(Message::Pong(data)).await?;
+                    }
+                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) | None => {
+                        break;
+                    }
+                    Some(Err(error)) => {
+                        anyhow::bail!("websocket receive failed: {error}");
+                    }
+                }
+            }
+            read = stdout.read(&mut stdout_buf), if stdout_open => {
+                let bytes_read = read.context("failed to read kubectl exec stdout")?;
+                if bytes_read == 0 {
+                    stdout_open = false;
+                } else {
+                    socket.send(Message::Binary(stdout_buf[..bytes_read].to_vec())).await
+                        .context("failed to forward stdout to websocket")?;
+                }
+            }
+            read = stderr.read(&mut stderr_buf), if stderr_open => {
+                let bytes_read = read.context("failed to read kubectl exec stderr")?;
+                if bytes_read == 0 {
+                    stderr_open = false;
+                } else {
+                    socket.send(Message::Binary(stderr_buf[..bytes_read].to_vec())).await
+                        .context("failed to forward stderr to websocket")?;
+                }
+            }
+        }
+
+        if !stdout_open && !stderr_open {
+            break;
+        }
+    }
+
+    drop(stdin);
+
+    let status = match child.try_wait().context("failed to poll kubectl exec")? {
+        Some(status) => status,
+        None => {
+            let _ = child.kill().await;
+            child.wait().await.context("failed to wait for kubectl exec after kill")?
+        }
+    };
+
+    log_info(&format!("kubectl exec finished status={status}"));
+    let _ = socket.close().await;
+    Ok(())
 }
 
 async fn ensure_kubectl_available(state: &AppState) -> Result<String> {

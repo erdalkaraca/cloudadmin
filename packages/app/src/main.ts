@@ -33,13 +33,14 @@ appLoaderService.registerApp(
     name: 'CloudAdmin',
     layout: {
       id: 'standard',
-      props: { 'show-aux-sidebar': "false" },
+      props: { 'show-aux-sidebar': "false", 'show-bottom-panel': "true" },
     },
     remaps: SIDEBAR_TAB_REMAPS,
     extensions: [
       '@eclipse-docks/extension-utils',
       '@eclipse-docks/extension-pwa',
       '@eclipse-docks/extension-command-palette',
+      '@eclipse-docks/extension-terminal',
       '@eclipse-docks/extension-catalog',
       '@eclipse-docks/extension-dataviewer',
       '@eclipse-docks/extension-md-editor',

@@ -10,8 +10,10 @@ import {
 } from './provider';
 import { k8sConnectionDialogRequired } from './k8s-connection-dialog';
 import {
+  listKubeconfigContextEntries,
   listKubeconfigContexts,
   listKubeconfigServers,
+  type K8sPersistData,
 } from './api/k8s-client';
 import {
   commonNodeActions,
@@ -20,6 +22,36 @@ import {
   parseContextsField,
   persistCompanionOf,
 } from './k8s-contributors-common';
+
+function normalizeServerUrl(url: string | undefined): string {
+  return String(url ?? '').trim().replace(/\/$/, '');
+}
+
+function contextNamesForServer(
+  persist: Pick<K8sPersistData, 'serverUrl'>,
+  entries: Array<{ name: string; serverUrl?: string }>,
+): string[] {
+  const selectedServer = normalizeServerUrl(persist.serverUrl);
+  if (!selectedServer) {
+    return [...new Set(entries.map((entry) => entry.name.trim()).filter(Boolean))];
+  }
+  const matches = entries
+    .filter((entry) => normalizeServerUrl(entry.serverUrl) === selectedServer)
+    .map((entry) => entry.name.trim())
+    .filter(Boolean);
+  return [...new Set(matches)];
+}
+
+async function resolveContextsForPersist(persist: K8sPersistData): Promise<string[]> {
+  try {
+    const entries = await listKubeconfigContextEntries();
+    const scoped = contextNamesForServer(persist, entries);
+    if (scoped.length > 0) return scoped;
+  } catch {
+    // Fall back to persisted/manual values when companion context discovery fails.
+  }
+  return persist.contexts ?? ['default'];
+}
 
 async function connectCompanion(connection?: CloudConnection): Promise<CloudConnectResult> {
   const persist = connection ? persistCompanionOf(connection) : undefined;
@@ -45,9 +77,15 @@ async function connectCompanion(connection?: CloudConnection): Promise<CloudConn
   let contexts = parseContextsField(values.contexts, persist?.contexts);
   if (!(values.contexts ?? '').trim()) {
     try {
-      const discovered = await listKubeconfigContexts();
-      if (discovered.contexts.length > 0) {
-        contexts = discovered.contexts;
+      const discoveredEntries = await listKubeconfigContextEntries();
+      const scoped = contextNamesForServer({ serverUrl: values.serverUrl }, discoveredEntries);
+      if (scoped.length > 0) {
+        contexts = scoped;
+      } else {
+        const discovered = await listKubeconfigContexts();
+        if (discovered.contexts.length > 0) {
+          contexts = discovered.contexts;
+        }
       }
     } catch {
       // Keep fallback contexts when discovery fails.
@@ -77,9 +115,9 @@ export const companionConnectionContributor: CloudConnectionContributor = {
   async restore(connection) {
     const persist = persistCompanionOf(connection);
     try {
-      const discovered = await listKubeconfigContexts();
-      const contexts = discovered.contexts.length > 0 ? discovered.contexts : (persist.contexts ?? ['default']);
-      const context = discovered.currentContext ?? contexts[0];
+      const contexts = await resolveContextsForPersist(persist);
+      const preferred = persist.context?.trim();
+      const context = preferred && contexts.includes(preferred) ? preferred : contexts[0];
       return {
         ...connection,
         persistData: {
@@ -109,13 +147,5 @@ export const companionConnectionContributor: CloudConnectionContributor = {
 export const companionTreeContributor = createTreeContributor(
   PROVIDER_ID_COMPANION,
   persistCompanionOf,
-  async (persist) => {
-    try {
-      const discovered = await listKubeconfigContexts();
-      if (discovered.contexts.length > 0) return discovered.contexts;
-    } catch {
-      // Fall through to persisted contexts.
-    }
-    return persist.contexts ?? ['default'];
-  },
+  async (persist) => resolveContextsForPersist(persist),
 );

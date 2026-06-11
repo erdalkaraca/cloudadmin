@@ -49,11 +49,18 @@ export interface KubeconfigServerEntry {
   serverUrl: string;
 }
 
+export interface KubeconfigContextEntry {
+  name: string;
+  serverUrl?: string;
+  namespace?: string;
+}
+
 interface KubeconfigView {
   ['current-context']?: string;
   contexts?: Array<{
     name?: string;
     context?: {
+      cluster?: string;
       namespace?: string;
     };
   }>;
@@ -178,6 +185,47 @@ export async function listKubeconfigServers(
   return entries;
 }
 
+export async function listKubeconfigContextEntries(
+  kubeconfigPath?: string,
+): Promise<KubeconfigContextEntry[]> {
+  await ensureCompanionK8sSetup();
+  const companion = new CompanionClient();
+  const env = kubeconfigPath?.trim() ? { KUBECONFIG: kubeconfigPath.trim() } : undefined;
+
+  const result = await companion.execTool({
+    requester: K8S_REQUESTER,
+    tool: 'kubectl',
+    args: ['config', 'view', '-o', 'json'],
+    env,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`kubectl config view failed: ${result.stderr || result.exitCode}`);
+  }
+
+  const parsed = JSON.parse(result.stdout) as KubeconfigView;
+  const clusterByName = new Map<string, string>();
+  for (const cluster of parsed.clusters ?? []) {
+    const name = cluster.name?.trim();
+    const serverUrl = cluster.cluster?.server?.trim();
+    if (!name || !serverUrl) continue;
+    clusterByName.set(name, serverUrl);
+  }
+
+  const entries: KubeconfigContextEntry[] = [];
+  for (const context of parsed.contexts ?? []) {
+    const name = context.name?.trim();
+    if (!name) continue;
+    const clusterName = context.context?.cluster?.trim();
+    entries.push({
+      name,
+      namespace: context.context?.namespace?.trim() || undefined,
+      serverUrl: clusterName ? clusterByName.get(clusterName) : undefined,
+    });
+  }
+
+  return entries;
+}
+
 export function getK8sAuth(connectionId: string): { serverUrl: string; token: string } | undefined {
   const secrets = getConnectionSecrets(connectionId);
   const token = secrets?.token;
@@ -249,10 +297,308 @@ interface K8sList<T> {
   items: T[];
 }
 
+interface K8sApiVersionsResponse {
+  versions?: string[];
+}
+
+interface K8sApiGroupsResponse {
+  groups?: Array<{
+    versions?: Array<{ groupVersion?: string }>;
+    preferredVersion?: { groupVersion?: string };
+  }>;
+}
+
+interface K8sApiResourceList {
+  groupVersion?: string;
+  resources?: Array<{
+    name?: string;
+    kind?: string;
+    namespaced?: boolean;
+    verbs?: string[];
+    version?: string;
+  }>;
+}
+
 interface K8sObjectMeta {
   name: string;
   namespace?: string;
   uid: string;
+}
+
+export interface NamespacedResourceType {
+  groupVersion: string;
+  resourceName: string;
+  kind: string;
+}
+
+export interface ClusterResourceType {
+  groupVersion: string;
+  resourceName: string;
+  kind: string;
+}
+
+export interface NamespacedObjectEntry {
+  name: string;
+  uid: string;
+  kind: string;
+}
+
+export interface ClusterObjectEntry {
+  name: string;
+  uid: string;
+  kind: string;
+}
+
+const resourceTypeDiscoveryCache = new Map<string, Promise<Array<NamespacedResourceType | ClusterResourceType>>>();
+
+function apiPrefixForGroupVersion(groupVersion: string): string {
+  return groupVersion.includes('/') ? `/apis/${groupVersion}` : `/api/${groupVersion}`;
+}
+
+function isSuccessful(res: Response): boolean {
+  return res.status >= 200 && res.status < 300;
+}
+
+function resourceDiscoveryCacheKey(
+  persist: K8sPersistData,
+  namespaced: boolean,
+): string {
+  return [
+    persist.authMode ?? 'companion',
+    persist.serverUrl.trim(),
+    persist.context?.trim() ?? '',
+    namespaced ? 'namespaced' : 'cluster',
+  ].join('::');
+}
+
+async function listResourceTypesViaCompanion(
+  persist: K8sPersistData,
+  namespaced: boolean,
+): Promise<Array<NamespacedResourceType | ClusterResourceType>> {
+  await ensureCompanionK8sSetup();
+  const companion = new CompanionClient();
+  const args = [
+    'api-resources',
+    '--verbs=list',
+    '--cached=false',
+    `--namespaced=${namespaced ? 'true' : 'false'}`,
+    '-o',
+    'json',
+  ];
+  const context = persist.context?.trim();
+  if (context) {
+    args.push('--context', context);
+  }
+
+  const result = await companion.execTool({
+    requester: K8S_REQUESTER,
+    tool: 'kubectl',
+    args,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`kubectl api-resources failed: ${result.stderr || result.exitCode}`);
+  }
+
+  const payload = JSON.parse(result.stdout) as K8sApiResourceList;
+  const discovered = new Map<string, NamespacedResourceType | ClusterResourceType>();
+  for (const resource of payload.resources ?? []) {
+    const resourceName = resource.name?.trim();
+    const kind = resource.kind?.trim();
+    const version = resource.version?.trim();
+    if (!resourceName || !kind || !version) continue;
+    if (resourceName.includes('/')) continue;
+
+    const groupVersion = payload.groupVersion?.trim()
+      ? payload.groupVersion.trim()
+      : version;
+    const key = `${groupVersion}::${resourceName}`;
+    discovered.set(key, { groupVersion, resourceName, kind });
+  }
+
+  return [...discovered.values()].sort((a, b) => {
+    if (a.groupVersion !== b.groupVersion) return a.groupVersion.localeCompare(b.groupVersion);
+    return a.resourceName.localeCompare(b.resourceName);
+  });
+}
+
+async function listResourceTypesViaDiscovery(
+  connectionId: string,
+  persist: K8sPersistData,
+  namespaced: boolean,
+): Promise<Array<NamespacedResourceType | ClusterResourceType>> {
+  const groupVersions = new Set<string>();
+
+  const coreVersionsRes = await k8sFetch(connectionId, persist, '/api');
+  if (isSuccessful(coreVersionsRes)) {
+    const payload = (await coreVersionsRes.json()) as K8sApiVersionsResponse;
+    for (const version of payload.versions ?? []) {
+      const trimmed = String(version).trim();
+      if (trimmed) groupVersions.add(trimmed);
+    }
+  }
+
+  const apiGroupsRes = await k8sFetch(connectionId, persist, '/apis');
+  if (isSuccessful(apiGroupsRes)) {
+    const payload = (await apiGroupsRes.json()) as K8sApiGroupsResponse;
+    for (const group of payload.groups ?? []) {
+      const preferred = group.preferredVersion?.groupVersion?.trim();
+      if (preferred) {
+        groupVersions.add(preferred);
+        continue;
+      }
+      for (const version of group.versions ?? []) {
+        const groupVersion = version.groupVersion?.trim();
+        if (groupVersion) groupVersions.add(groupVersion);
+      }
+    }
+  }
+
+  const discovered = new Map<string, NamespacedResourceType | ClusterResourceType>();
+  for (const groupVersion of groupVersions) {
+    const res = await k8sFetch(connectionId, persist, `${apiPrefixForGroupVersion(groupVersion)}`);
+    if (!isSuccessful(res)) {
+      continue;
+    }
+
+    const payload = (await res.json()) as K8sApiResourceList;
+    for (const resource of payload.resources ?? []) {
+      const resourceName = resource.name?.trim();
+      const kind = resource.kind?.trim();
+      const resourceNamespaced = resource.namespaced === true;
+      const supportsList = (resource.verbs ?? []).includes('list');
+      if (!resourceName || !kind || resourceNamespaced !== namespaced || !supportsList) continue;
+      if (resourceName.includes('/')) continue;
+
+      const key = `${groupVersion}::${resourceName}`;
+      discovered.set(key, { groupVersion, resourceName, kind });
+    }
+  }
+
+  return [...discovered.values()].sort((a, b) => {
+    if (a.groupVersion !== b.groupVersion) return a.groupVersion.localeCompare(b.groupVersion);
+    return a.resourceName.localeCompare(b.resourceName);
+  });
+}
+
+async function listResourceTypes(
+  connectionId: string,
+  persist: K8sPersistData,
+  namespaced: boolean,
+): Promise<Array<NamespacedResourceType | ClusterResourceType>> {
+  const cacheKey = resourceDiscoveryCacheKey(persist, namespaced);
+  const cached = resourceTypeDiscoveryCache.get(cacheKey);
+  if (cached) return cached;
+
+  const pending = (async () => {
+    if (persist.authMode !== 'bearer') {
+      try {
+        return await listResourceTypesViaCompanion(persist, namespaced);
+      } catch {
+        // Fall back to API discovery when kubectl-based discovery is unavailable.
+      }
+    }
+    return listResourceTypesViaDiscovery(connectionId, persist, namespaced);
+  })();
+
+  resourceTypeDiscoveryCache.set(cacheKey, pending);
+  try {
+    return await pending;
+  } catch (error) {
+    resourceTypeDiscoveryCache.delete(cacheKey);
+    throw error;
+  }
+}
+
+export async function listNamespacedResourceTypes(
+  connectionId: string,
+  persist: K8sPersistData,
+): Promise<NamespacedResourceType[]> {
+  return (await listResourceTypes(connectionId, persist, true)) as NamespacedResourceType[];
+}
+
+export async function listClusterResourceTypes(
+  connectionId: string,
+  persist: K8sPersistData,
+): Promise<ClusterResourceType[]> {
+  return (await listResourceTypes(connectionId, persist, false)) as ClusterResourceType[];
+}
+
+export async function listNamespacedObjects(
+  connectionId: string,
+  persist: K8sPersistData,
+  namespace: string,
+  resourceType: NamespacedResourceType,
+): Promise<NamespacedObjectEntry[]> {
+  const prefix = apiPrefixForGroupVersion(resourceType.groupVersion);
+  const path = `${prefix}/namespaces/${encodeURIComponent(namespace)}/${encodeURIComponent(resourceType.resourceName)}`;
+  const res = await k8sFetch(connectionId, persist, path);
+  if (res.status === 403 || res.status === 404) return [];
+  if (!res.ok) throw new Error(`list ${resourceType.resourceName}: ${res.status}`);
+
+  const payload = (await res.json()) as K8sList<{ metadata?: K8sObjectMeta }>;
+  return (payload.items ?? [])
+    .map((item) => ({
+      name: String(item.metadata?.name ?? '').trim(),
+      uid: String(item.metadata?.uid ?? '').trim(),
+      kind: resourceType.kind,
+    }))
+    .filter((item) => Boolean(item.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getNamespacedObject(
+  connectionId: string,
+  persist: K8sPersistData,
+  namespace: string,
+  resourceType: NamespacedResourceType,
+  objectName: string,
+): Promise<unknown> {
+  const prefix = apiPrefixForGroupVersion(resourceType.groupVersion);
+  const path = `${prefix}/namespaces/${encodeURIComponent(namespace)}/${encodeURIComponent(resourceType.resourceName)}/${encodeURIComponent(objectName)}`;
+  const res = await k8sFetch(connectionId, persist, path);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`get ${resourceType.resourceName}/${objectName}: ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+export async function listClusterObjects(
+  connectionId: string,
+  persist: K8sPersistData,
+  resourceType: ClusterResourceType,
+): Promise<ClusterObjectEntry[]> {
+  const prefix = apiPrefixForGroupVersion(resourceType.groupVersion);
+  const path = `${prefix}/${encodeURIComponent(resourceType.resourceName)}`;
+  const res = await k8sFetch(connectionId, persist, path);
+  if (res.status === 403 || res.status === 404) return [];
+  if (!res.ok) throw new Error(`list ${resourceType.resourceName}: ${res.status}`);
+
+  const payload = (await res.json()) as K8sList<{ metadata?: K8sObjectMeta }>;
+  return (payload.items ?? [])
+    .map((item) => ({
+      name: String(item.metadata?.name ?? '').trim(),
+      uid: String(item.metadata?.uid ?? '').trim(),
+      kind: resourceType.kind,
+    }))
+    .filter((item) => Boolean(item.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getClusterObject(
+  connectionId: string,
+  persist: K8sPersistData,
+  resourceType: ClusterResourceType,
+  objectName: string,
+): Promise<unknown> {
+  const prefix = apiPrefixForGroupVersion(resourceType.groupVersion);
+  const path = `${prefix}/${encodeURIComponent(resourceType.resourceName)}/${encodeURIComponent(objectName)}`;
+  const res = await k8sFetch(connectionId, persist, path);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`get ${resourceType.resourceName}/${objectName}: ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return res.json();
 }
 
 export async function listNamespaces(

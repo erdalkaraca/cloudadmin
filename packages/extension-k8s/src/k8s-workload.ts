@@ -5,7 +5,13 @@ import type {
   WorkloadConfigContent,
   WorkloadStatus,
 } from 'extension-cloud/api';
-import { getPod, getPodLogs, type K8sPersistData } from './api/k8s-client';
+import {
+  getClusterObject,
+  getNamespacedObject,
+  getPod,
+  getPodLogs,
+  type K8sPersistData,
+} from './api/k8s-client';
 
 function persistOf(connection: CloudTreeActionContext['connection']): K8sPersistData {
   const d = connection.persistData;
@@ -48,6 +54,121 @@ function containerNameOf(context: CloudTreeActionContext): string {
   throw new Error('Container name missing on tree node.');
 }
 
+function objectTypeNameOf(context: CloudTreeActionContext): string {
+  const value = context.node.meta?.resourceTypeName;
+  if (typeof value === 'string' && value) return value;
+  throw new Error('Object resource type name missing on tree node.');
+}
+
+function objectTypeGroupVersionOf(context: CloudTreeActionContext): string {
+  const value = context.node.meta?.resourceTypeGroupVersion;
+  if (typeof value === 'string' && value) return value;
+  throw new Error('Object resource type groupVersion missing on tree node.');
+}
+
+function objectKindOf(context: CloudTreeActionContext): string {
+  const value = context.node.meta?.objectKind;
+  if (typeof value === 'string' && value) return value;
+  return 'Object';
+}
+
+function objectNameOf(context: CloudTreeActionContext): string {
+  const value = context.node.meta?.objectName;
+  if (typeof value === 'string' && value) return value;
+  throw new Error('Object name missing on tree node.');
+}
+
+function isInventoryObjectNode(context: CloudTreeActionContext): boolean {
+  return Boolean(
+    context.node.meta?.resourceTypeName &&
+      context.node.meta?.resourceTypeGroupVersion &&
+      context.node.meta?.objectName,
+  );
+}
+
+function isClusterScopedNode(context: CloudTreeActionContext): boolean {
+  return context.node.meta?.clusterScoped === true || context.node.meta?.clusterScoped === 'true';
+}
+
+function yamlEscape(value: string): string {
+  const escaped = value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n');
+  return `"${escaped}"`;
+}
+
+function scalarToYaml(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'string') {
+    if (value === '') return '""';
+    const simple = /^[A-Za-z0-9._\/-]+$/.test(value);
+    return simple ? value : yamlEscape(value);
+  }
+  return yamlEscape(String(value));
+}
+
+function jsonToYaml(value: unknown, indentLevel = 0): string {
+  const indent = '  '.repeat(indentLevel);
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    return value
+      .map((item) => {
+        if (item && typeof item === 'object') {
+          const nested = jsonToYaml(item, indentLevel + 1);
+          return `${indent}-\n${nested}`;
+        }
+        return `${indent}- ${scalarToYaml(item)}`;
+      })
+      .join('\n');
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return '{}';
+    return entries
+      .map(([key, item]) => {
+        if (item && typeof item === 'object') {
+          const nested = jsonToYaml(item, indentLevel + 1);
+          return `${indent}${key}:\n${nested}`;
+        }
+        return `${indent}${key}: ${scalarToYaml(item)}`;
+      })
+      .join('\n');
+  }
+
+  return `${indent}${scalarToYaml(value)}`;
+}
+
+async function getInventoryObject(context: CloudTreeActionContext): Promise<unknown> {
+  const persist = scopedPersist(context);
+  if (isClusterScopedNode(context)) {
+    return getClusterObject(
+      context.connection.id,
+      persist,
+      {
+        groupVersion: objectTypeGroupVersionOf(context),
+        resourceName: objectTypeNameOf(context),
+        kind: objectKindOf(context),
+      },
+      objectNameOf(context),
+    );
+  }
+  return getNamespacedObject(
+    context.connection.id,
+    persist,
+    namespaceOf(context),
+    {
+      groupVersion: objectTypeGroupVersionOf(context),
+      resourceName: objectTypeNameOf(context),
+      kind: objectKindOf(context),
+    },
+    objectNameOf(context),
+  );
+}
+
 type PodJson = {
   metadata?: { name?: string; namespace?: string };
   spec?: {
@@ -82,11 +203,23 @@ export function createK8sWorkloadHandler(providerId: string): CloudWorkloadHandl
   return {
     providerId,
 
-  getCapabilities(): WorkloadCapabilities {
-    return { logs: true, config: true, inspect: true };
-  },
+    getCapabilities(context): WorkloadCapabilities {
+      if (isInventoryObjectNode(context)) {
+        return { config: true, inspect: true };
+      }
+      return { logs: true, config: true, inspect: true };
+    },
 
     async getStatus(context): Promise<WorkloadStatus> {
+      if (isInventoryObjectNode(context)) {
+        return {
+          label: objectKindOf(context),
+          detail: isClusterScopedNode(context)
+            ? `${objectTypeNameOf(context)} · cluster-scoped`
+            : `${objectTypeNameOf(context)} · ${namespaceOf(context)}`,
+        };
+      }
+
       const persist = scopedPersist(context);
       const pod = (await getPod(
         context.connection.id,
@@ -119,6 +252,14 @@ export function createK8sWorkloadHandler(providerId: string): CloudWorkloadHandl
     },
 
     async fetchConfig(context): Promise<WorkloadConfigContent> {
+      if (isInventoryObjectNode(context)) {
+        const objectData = await getInventoryObject(context);
+        return {
+          language: 'yaml',
+          text: jsonToYaml(objectData),
+        };
+      }
+
       const persist = scopedPersist(context);
       const pod = (await getPod(
         context.connection.id,
@@ -151,6 +292,10 @@ export function createK8sWorkloadHandler(providerId: string): CloudWorkloadHandl
     },
 
     async fetchInspect(context) {
+      if (isInventoryObjectNode(context)) {
+        return getInventoryObject(context);
+      }
+
       const persist = scopedPersist(context);
       return getPod(
         context.connection.id,

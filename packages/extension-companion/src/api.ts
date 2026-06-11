@@ -91,6 +91,46 @@ export interface CompanionToolPolicyContribution {
 }
 
 export const DEFAULT_COMPANION_BASE = 'http://127.0.0.1:9477';
+export const DEFAULT_COMPANION_WS_BASE = 'ws://127.0.0.1:9477';
+
+/**
+ * Parameters for a Kubernetes pod exec WebSocket session.
+ *
+ * The companion exposes `ws://<host>/k8s/exec` which spawns
+ * `kubectl exec -i <pod> -n <namespace> --context <context> -c <container> -- <command>`
+ * and relays stdin/stdout over the WebSocket.
+ *
+ * Protocol (both directions):
+ *   - Text/binary frames:         raw stdin (browser→companion) / stdout (companion→browser)
+ *   - JSON frame `{ "resize": { "cols": N, "rows": N } }`:  terminal resize notification
+ */
+export interface K8sExecWsParams {
+  /** Kubeconfig context name. */
+  context: string;
+  namespace: string;
+  pod: string;
+  container: string;
+  /** Default: `["/bin/sh"]` */
+  command?: string[];
+}
+
+/**
+ * Build the WebSocket URL for a Kubernetes pod exec session via the companion.
+ */
+export function buildK8sExecWsUrl(
+  params: K8sExecWsParams,
+  wsBase = DEFAULT_COMPANION_WS_BASE,
+): string {
+  const url = new URL('/k8s/exec', wsBase);
+  url.searchParams.set('context', params.context);
+  url.searchParams.set('namespace', params.namespace);
+  url.searchParams.set('pod', params.pod);
+  url.searchParams.set('container', params.container);
+  if (params.command) {
+    url.searchParams.set('command', JSON.stringify(params.command));
+  }
+  return url.toString();
+}
 
 export class CompanionClient {
   constructor(private readonly baseUrl: string = DEFAULT_COMPANION_BASE) {}
