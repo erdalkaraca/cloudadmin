@@ -126,4 +126,4 @@ Optional: set `OPENAI_API_KEY` in root `.env` for AI-generated release notes.
 
 1. **Settings → Pages → Build and deployment** — source: branch **`gh-pages`**, folder **`/ (root)`**
 2. **Settings → Actions → General → Workflow permissions** — enable **Read and write permissions**
-3. **Settings → Secrets → Actions** — add **`PAT_TOKEN`** (recommended so auto-tag tag pushes trigger `build-and-deploy`; the default `GITHUB_TOKEN` often does not chain workflows)
+3. **Settings → Secrets → Actions** — **`PAT_TOKEN`** is optional; auto-tag deploys to Pages in the same workflow run after tagging.

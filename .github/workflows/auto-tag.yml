@@ -11,6 +11,8 @@ permissions:
 jobs:
   auto-tag:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract-version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -71,3 +73,11 @@ jobs:
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    needs: auto-tag
+    if: needs.auto-tag.outputs.version != ''
+    uses: ./.github/workflows/reusable-deploy-pages.yml
+    with:
+      version: ${{ needs.auto-tag.outputs.version }}
+      node-version: '22'
