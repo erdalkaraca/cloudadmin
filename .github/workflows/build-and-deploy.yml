@@ -16,8 +16,60 @@ on:
 
 jobs:
   deploy:
-    uses: ./.github/workflows/reusable-deploy-pages.yml
-    secrets: inherit
-    with:
-      version: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
-      node-version: '22'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Resolve version
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.meta.outputs.version }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set package.json version
+        run: |
+          npm version --no-commit-hooks --no-git-tag-version "${{ steps.meta.outputs.version }}" --workspace=cloudadmin
+
+      - name: Build CloudAdmin app
+        run: |
+          REPO=${GITHUB_REPOSITORY##*/}
+          export VITE_BASE_PATH="/$REPO/"
+          npm run build
+
+      - name: Deploy to GitHub Pages branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./packages/app/dist
+          publish_branch: gh-pages
+
+      - name: Deployment Summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Version: ${{ steps.meta.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build successful" >> $GITHUB_STEP_SUMMARY
+          echo "- Deployed to GitHub Pages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Access" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL**: https://erdalkaraca.github.io/cloudadmin/" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
