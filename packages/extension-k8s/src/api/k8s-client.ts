@@ -233,6 +233,13 @@ export function getK8sAuth(connectionId: string): { serverUrl: string; token: st
   return { serverUrl: '', token };
 }
 
+function usesBearerAuth(connectionId: string, persist: K8sPersistData): boolean {
+  if (persist.authMode === 'bearer') return true;
+  if (persist.authMode === 'companion') return false;
+  const token = getConnectionSecrets(connectionId)?.token?.trim();
+  return Boolean(token && normalizeServerUrl(persist.serverUrl));
+}
+
 function fetchViaBearerToken(
   connectionId: string,
   persist: K8sPersistData,
@@ -262,7 +269,7 @@ export async function k8sFetch(
   persist: K8sPersistData,
   path: string,
 ): Promise<Response> {
-  if (persist.authMode === 'bearer') {
+  if (usesBearerAuth(connectionId, persist)) {
     return fetchViaBearerToken(connectionId, persist, path);
   }
   return fetchViaCompanion(persist, path);
@@ -360,11 +367,12 @@ function isSuccessful(res: Response): boolean {
 }
 
 function resourceDiscoveryCacheKey(
+  connectionId: string,
   persist: K8sPersistData,
   namespaced: boolean,
 ): string {
   return [
-    persist.authMode ?? 'companion',
+    usesBearerAuth(connectionId, persist) ? 'bearer' : 'companion',
     persist.serverUrl.trim(),
     persist.context?.trim() ?? '',
     namespaced ? 'namespaced' : 'cluster',
@@ -485,12 +493,12 @@ async function listResourceTypes(
   persist: K8sPersistData,
   namespaced: boolean,
 ): Promise<Array<NamespacedResourceType | ClusterResourceType>> {
-  const cacheKey = resourceDiscoveryCacheKey(persist, namespaced);
+  const cacheKey = resourceDiscoveryCacheKey(connectionId, persist, namespaced);
   const cached = resourceTypeDiscoveryCache.get(cacheKey);
   if (cached) return cached;
 
   const pending = (async () => {
-    if (persist.authMode !== 'bearer') {
+    if (!usesBearerAuth(connectionId, persist)) {
       try {
         return await listResourceTypesViaCompanion(persist, namespaced);
       } catch {
@@ -606,7 +614,7 @@ export async function listNamespaces(
   persist: K8sPersistData,
 ): Promise<Array<{ name: string; uid: string }>> {
   const res = await k8sFetch(connectionId, persist, '/api/v1/namespaces');
-  if (res.status === 403 && persist.authMode !== 'bearer') {
+  if (res.status === 403 && !usesBearerAuth(connectionId, persist)) {
     return await inferNamespacesFromKubeconfig(persist);
   }
   if (!res.ok) {

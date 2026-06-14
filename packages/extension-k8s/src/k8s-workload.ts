@@ -10,16 +10,8 @@ import {
   getNamespacedObject,
   getPod,
   getPodLogs,
-  type K8sPersistData,
 } from './api/k8s-client';
-
-function persistOf(connection: CloudTreeActionContext['connection']): K8sPersistData {
-  const d = connection.persistData;
-  return {
-    serverUrl: String(d.serverUrl ?? ''),
-    context: d.context != null ? String(d.context) : undefined,
-  };
-}
+import { persistOf } from './k8s-contributors-common';
 
 function contextOf(context: CloudTreeActionContext): string | undefined {
   const ctx = context.node.meta?.kubeContext;

@@ -19,6 +19,7 @@ import {
   type K8sPersistData,
 } from './api/k8s-client';
 import { K8S_EXEC_PROFILE_ID } from './k8s-terminal-profile';
+import { PROVIDER_ID_BEARER } from './provider';
 
 export function manualNamespacesByContextOf(
   persistData: Record<string, unknown>,
@@ -96,6 +97,12 @@ export function persistBearerOf(connection: CloudConnection): K8sPersistData {
     contexts: contextsOf(d),
     manualNamespacesByContext: manualNamespacesByContextOf(d),
   };
+}
+
+export function persistOf(connection: CloudConnection): K8sPersistData {
+  return connection.providerId === PROVIDER_ID_BEARER
+    ? persistBearerOf(connection)
+    : persistCompanionOf(connection);
 }
 
 export type PersistResolver = (connection: CloudConnection) => K8sPersistData;
