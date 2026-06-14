@@ -78,6 +78,7 @@ jobs:
     needs: auto-tag
     if: needs.auto-tag.outputs.version != ''
     uses: ./.github/workflows/reusable-deploy-pages.yml
+    secrets: inherit
     with:
       version: ${{ needs.auto-tag.outputs.version }}
       node-version: '22'

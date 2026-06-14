@@ -17,6 +17,7 @@ on:
 jobs:
   deploy:
     uses: ./.github/workflows/reusable-deploy-pages.yml
+    secrets: inherit
     with:
       version: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
       node-version: '22'
