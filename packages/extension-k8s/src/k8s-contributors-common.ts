@@ -19,6 +19,7 @@ import {
 } from './api/k8s-api';
 import { createK8sBackend } from './api/k8s-backend';
 import type { K8sPersistData } from './api/k8s-types';
+import { probeBearerExecAccess } from './api/k8s-exec-ws';
 import { K8S_EXEC_PROFILE_ID } from './k8s-terminal-profile';
 import { PROVIDER_ID_BEARER } from './provider';
 
@@ -108,8 +109,27 @@ export function persistOf(connection: CloudConnection): K8sPersistData {
 
 export type PersistResolver = (connection: CloudConnection) => K8sPersistData;
 
-function shouldShowTerminalAction(connection: CloudConnection): boolean {
-  return createK8sBackend(connection).supportsConsole();
+function shouldShowPodConsoleAction(connection: CloudConnection): boolean {
+  return createK8sBackend(connection).supportsPodConsole();
+}
+
+function shouldShowClusterConsoleAction(connection: CloudConnection): boolean {
+  return createK8sBackend(connection).supportsClusterConsole();
+}
+
+function terminalEnvForConnection(
+  connection: CloudConnection,
+  persist: K8sPersistData,
+): Record<string, string> {
+  const backend = createK8sBackend(connection);
+  const env: Record<string, string> = {
+    K8S_AUTH_MODE: backend.mode,
+  };
+  if (backend.mode === 'bearer') {
+    env.K8S_CONNECTION_ID = connection.id;
+    env.K8S_SERVER_URL = persist.serverUrl;
+  }
+  return env;
 }
 
 function parseCommandArgs(raw: string): string[] {
@@ -123,8 +143,8 @@ async function openTerminalForNode(
   persistOf: PersistResolver,
 ): Promise<void> {
   const persist = persistOf(connection);
-  if (!createK8sBackend(connection).supportsConsole()) {
-    throw new Error('Console is only available for companion-backed connections.');
+  if (!shouldShowPodConsoleAction(connection)) {
+    throw new Error('Console is not available for this connection.');
   }
 
   const kubeContext = String(node.meta?.kubeContext ?? persist.context ?? '').trim();
@@ -157,10 +177,22 @@ async function openTerminalForNode(
   });
   const command = parseCommandArgs(String(shellDialog.command ?? '/bin/sh'));
 
+  if (persist.authMode === 'bearer') {
+    await probeBearerExecAccess({
+      connectionId: connection.id,
+      serverUrl: persist.serverUrl,
+      namespace,
+      pod,
+      container,
+      command,
+    });
+  }
+
   const terminal = await terminalService.createTerminal({
     profileId: K8S_EXEC_PROFILE_ID,
     name: `${pod}/${container}`,
     env: {
+      ...terminalEnvForConnection(connection, persist),
       K8S_CONTEXT: kubeContext,
       K8S_NAMESPACE: namespace,
       K8S_POD: pod,
@@ -180,7 +212,7 @@ async function openClusterTerminal(
   persistOf: PersistResolver,
 ): Promise<void> {
   const persist = persistOf(connection);
-  if (!createK8sBackend(connection).supportsConsole()) {
+  if (!shouldShowClusterConsoleAction(connection)) {
     throw new Error('Cluster console is only available for companion-backed connections.');
   }
 
@@ -194,6 +226,7 @@ async function openClusterTerminal(
   const name = namespace ? `kubectl ${kubeContext}/${namespace}` : `kubectl ${kubeContext}`;
 
   const env: Record<string, string> = {
+    ...terminalEnvForConnection(connection, persist),
     K8S_TARGET: 'cluster',
     K8S_CONTEXT: kubeContext,
   };
@@ -263,7 +296,7 @@ export function commonNodeActions(
     const contexts = persist.contexts?.map((c) => c.trim()).filter(Boolean) ?? [];
     if (contexts.length === 1) {
       const actions: CloudTreeAction[] = [addManualNamespaceAction(connection, persistOf, contexts[0])];
-      if (shouldShowTerminalAction(connection)) {
+      if (shouldShowClusterConsoleAction(connection)) {
         actions.push({
           id: 'k8s.cluster.console',
           label: 'Open cluster console',
@@ -279,7 +312,7 @@ export function commonNodeActions(
   if (node.kind === CloudTreeNodeKind.Scope) {
     const contextName = String(node.meta?.kubeContext ?? node.label).trim() || 'default';
     const actions: CloudTreeAction[] = [addManualNamespaceAction(connection, persistOf, contextName)];
-    if (shouldShowTerminalAction(connection)) {
+    if (shouldShowClusterConsoleAction(connection)) {
       actions.push({
         id: 'k8s.scope.console',
         label: 'Open cluster console',
@@ -300,7 +333,7 @@ export function commonNodeActions(
     const persist = persistOf(connection);
     const manual = contextName ? namespacesForContext(persist, contextName) : [];
     if (!oldName || !contextName || !manual.includes(oldName)) {
-      if (shouldShowTerminalAction(connection)) {
+      if (shouldShowClusterConsoleAction(connection)) {
         return [
           {
             id: 'k8s.namespace.console',
@@ -353,7 +386,7 @@ export function commonNodeActions(
         },
       },
     ];
-    if (shouldShowTerminalAction(connection)) {
+    if (shouldShowClusterConsoleAction(connection)) {
       actions.push({
         id: 'k8s.namespace.console',
         label: 'Open cluster console',
@@ -365,7 +398,7 @@ export function commonNodeActions(
   }
 
   if (
-    shouldShowTerminalAction(connection) &&
+    shouldShowPodConsoleAction(connection) &&
     node.kind === CloudTreeNodeKind.Group &&
     typeof node.meta?.namespace === 'string' &&
     typeof node.meta?.podName === 'string' &&
@@ -416,7 +449,7 @@ export function commonNodeActions(
     },
   ];
 
-  if (shouldShowTerminalAction(connection)) {
+  if (shouldShowPodConsoleAction(connection)) {
     actions.push({
       id: 'k8s.workload.console',
       label: 'Open console',

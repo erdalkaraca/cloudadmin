@@ -74,7 +74,11 @@ export class BearerK8sBackend implements K8sBackend {
     return discoverResourceTypes(this, persist, namespaced);
   }
 
-  supportsConsole(): boolean {
+  supportsPodConsole(): boolean {
+    return true;
+  }
+
+  supportsClusterConsole(): boolean {
     return false;
   }
 }

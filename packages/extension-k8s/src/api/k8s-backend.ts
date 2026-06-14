@@ -15,7 +15,8 @@ export interface K8sBackend {
   testConnection(persist: K8sPersistData): Promise<void>;
   listNamespaces(persist: K8sPersistData): Promise<K8sNamespaceEntry[]>;
   listResourceTypes(persist: K8sPersistData, namespaced: boolean): Promise<K8sResourceType[]>;
-  supportsConsole(): boolean;
+  supportsPodConsole(): boolean;
+  supportsClusterConsole(): boolean;
 }
 
 export function createK8sBackend(connection: CloudConnection): K8sBackend {

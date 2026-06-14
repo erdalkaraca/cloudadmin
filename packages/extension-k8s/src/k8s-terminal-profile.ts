@@ -5,6 +5,15 @@ import {
   type TerminalCreationOptions,
   type TerminalDimensions,
 } from '@eclipse-docks/extension-terminal/api';
+import {
+  formatExecChannelOutput,
+  openBearerExecSocket,
+  parseExecMessage,
+  sendExecResize,
+  sendExecStdin,
+  type BearerExecSession,
+} from './api/k8s-exec-ws';
+import { isKubernetesExecRbacError, toastKubernetesExecRbacError } from './k8s-toast';
 
 export const K8S_EXEC_PROFILE_ID = 'k8s.exec';
 const LOCAL_PROMPT = '$> ';
@@ -12,7 +21,10 @@ const CLUSTER_PROMPT = '$> kubectl ';
 const K8S_REQUESTER = 'extension-k8s';
 
 interface K8sExecContext {
+  authMode: 'companion' | 'bearer';
   mode: 'pod' | 'cluster';
+  connectionId?: string;
+  serverUrl?: string;
   kubeContext: string;
   namespace?: string;
   pod?: string;
@@ -36,6 +48,7 @@ function parseCommand(options: TerminalCreationOptions | undefined): string[] | 
 }
 
 function contextFromOptions(options?: TerminalCreationOptions): K8sExecContext {
+  const authMode = options?.env?.K8S_AUTH_MODE?.trim() === 'bearer' ? 'bearer' : 'companion';
   const kubeContext = requireEnvValue(options, 'K8S_CONTEXT');
   const target = options?.env?.K8S_TARGET?.trim();
   const pod = options?.env?.K8S_POD?.trim();
@@ -44,14 +57,20 @@ function contextFromOptions(options?: TerminalCreationOptions): K8sExecContext {
 
   if (target === 'cluster' || !pod || !container) {
     return {
+      authMode,
       mode: 'cluster',
+      connectionId: options?.env?.K8S_CONNECTION_ID?.trim(),
+      serverUrl: options?.env?.K8S_SERVER_URL?.trim(),
       kubeContext,
       namespace,
     };
   }
 
   return {
+    authMode,
     mode: 'pod',
+    connectionId: options?.env?.K8S_CONNECTION_ID?.trim(),
+    serverUrl: options?.env?.K8S_SERVER_URL?.trim(),
     kubeContext,
     namespace: requireEnvValue(options, 'K8S_NAMESPACE'),
     pod: requireEnvValue(options, 'K8S_POD'),
@@ -65,6 +84,7 @@ class K8sExecTerminalBackend implements TerminalBackend {
   private readonly decoder = new TextDecoder();
   private readonly companion = new CompanionClient();
   private socket: WebSocket | null = null;
+  private bearerSession: BearerExecSession | undefined;
   private sawCarriageReturn = false;
   private initialPromptShown = false;
   private promptText = LOCAL_PROMPT;
@@ -120,7 +140,6 @@ class K8sExecTerminalBackend implements TerminalBackend {
       return [];
     }
 
-    // Accept common shorthand commands in cluster mode.
     if (tokens[0] === 'whoami') {
       return ['auth', 'whoami', ...tokens.slice(1)];
     }
@@ -249,17 +268,49 @@ class K8sExecTerminalBackend implements TerminalBackend {
     }
   }
 
-  async open(initialDimensions?: TerminalDimensions): Promise<void> {
-    if (this.context.mode === 'cluster') {
-      this.promptText = CLUSTER_PROMPT;
-      this.emit('Connected (cluster mode). Run kubectl commands and press Enter.\r\n');
-      queueMicrotask(() => this.emitPrompt());
-      void initialDimensions;
+  private attachSocketHandlers(socket: WebSocket, onOpen: () => void): void {
+    socket.onopen = () => {
+      this.socket = socket;
+      onOpen();
+    };
+    socket.onclose = () => {
+      this.socket = null;
+      this.bearerSession = undefined;
+    };
+    socket.onmessage = (event) => {
+      void this.handleSocketMessage(event.data);
+    };
+  }
+
+  private async handleSocketMessage(data: string | ArrayBuffer | Blob): Promise<void> {
+    if (this.bearerSession) {
+      const message = await parseExecMessage(this.bearerSession, data);
+      if (!message) return;
+      const output = formatExecChannelOutput(message.channel, message.payload);
+      if (!output) return;
+      this.emit(this.normalizeOutput(output));
+      if (this.awaitingCommandPrompt) this.schedulePromptAfterIdle();
       return;
     }
 
-    this.promptText = LOCAL_PROMPT;
+    if (typeof data === 'string') {
+      this.emit(this.normalizeOutput(data));
+      if (this.awaitingCommandPrompt) this.schedulePromptAfterIdle();
+      return;
+    }
+    if (data instanceof ArrayBuffer) {
+      this.emit(this.normalizeOutput(this.decoder.decode(data)));
+      if (this.awaitingCommandPrompt) this.schedulePromptAfterIdle();
+      return;
+    }
+    if (data instanceof Blob) {
+      const buffer = await data.arrayBuffer();
+      this.emit(this.normalizeOutput(this.decoder.decode(buffer)));
+      if (this.awaitingCommandPrompt) this.schedulePromptAfterIdle();
+    }
+  }
 
+  private async openCompanionPodExec(initialDimensions?: TerminalDimensions): Promise<void> {
     const wsUrl = buildK8sExecWsUrl({
       context: this.context.kubeContext,
       namespace: this.context.namespace ?? '',
@@ -271,45 +322,88 @@ class K8sExecTerminalBackend implements TerminalBackend {
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        this.socket = ws;
+      this.attachSocketHandlers(ws, () => {
         this.emit('Connected (no PTY). Type command and press Enter.\r\n');
         queueMicrotask(() => this.emitPrompt());
         resolve();
         if (initialDimensions) {
           this.setDimensions(initialDimensions);
         }
-      };
-      ws.onerror = () => reject(new Error('Failed to connect to Kubernetes exec socket.'));
-      ws.onclose = () => {
-        this.socket = null;
-      };
-      ws.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-          this.emit(this.normalizeOutput(event.data));
-          if (this.awaitingCommandPrompt) this.schedulePromptAfterIdle();
-          return;
-        }
-        if (event.data instanceof ArrayBuffer) {
-          this.emit(this.normalizeOutput(this.decoder.decode(event.data)));
-          if (this.awaitingCommandPrompt) this.schedulePromptAfterIdle();
-          return;
-        }
-        if (event.data instanceof Blob) {
-          void event.data.arrayBuffer().then((buffer) => {
-            this.emit(this.normalizeOutput(this.decoder.decode(buffer)));
-            if (this.awaitingCommandPrompt) this.schedulePromptAfterIdle();
-          });
-        }
-      };
+      });
+      ws.onerror = () => reject(new Error('Failed to connect to Kubernetes exec socket. Is the companion running?'));
     });
+  }
+
+  private async openBearerPodExec(initialDimensions?: TerminalDimensions): Promise<void> {
+    const connectionId = this.context.connectionId?.trim();
+    const serverUrl = this.context.serverUrl?.trim();
+    const namespace = this.context.namespace?.trim();
+    const pod = this.context.pod?.trim();
+    const container = this.context.container?.trim();
+    if (!connectionId || !serverUrl || !namespace || !pod || !container) {
+      throw new Error('Bearer exec requires connection, server URL, namespace, pod, and container.');
+    }
+
+    const session = await openBearerExecSocket({
+      connectionId,
+      serverUrl,
+      namespace,
+      pod,
+      container,
+      command: this.context.command,
+    });
+
+    this.bearerSession = session;
+    this.socket = session.socket;
+    session.socket.onmessage = (event) => {
+      void this.handleSocketMessage(event.data);
+    };
+    session.socket.onclose = () => {
+      this.socket = null;
+      this.bearerSession = undefined;
+    };
+
+    this.emit('Connected (bearer exec). Type command and press Enter.\r\n');
+    queueMicrotask(() => this.emitPrompt());
+    if (initialDimensions) {
+      this.setDimensions(initialDimensions);
+    }
+  }
+
+  async open(initialDimensions?: TerminalDimensions): Promise<void> {
+    try {
+      if (this.context.mode === 'cluster') {
+        if (this.context.authMode === 'bearer') {
+          throw new Error('Cluster console is not available for bearer connections.');
+        }
+        this.promptText = CLUSTER_PROMPT;
+        this.emit('Connected (cluster mode). Run kubectl commands and press Enter.\r\n');
+        queueMicrotask(() => this.emitPrompt());
+        void initialDimensions;
+        return;
+      }
+
+      this.promptText = LOCAL_PROMPT;
+      if (this.context.authMode === 'bearer') {
+        await this.openBearerPodExec(initialDimensions);
+        return;
+      }
+      await this.openCompanionPodExec(initialDimensions);
+    } catch (error) {
+      if (isKubernetesExecRbacError(error)) {
+        toastKubernetesExecRbacError(error);
+        this.close();
+        return;
+      }
+      throw error;
+    }
   }
 
   close(): void {
     this.clearPromptIdleTimer();
     this.socket?.close();
     this.socket = null;
+    this.bearerSession = undefined;
     this.initialPromptShown = false;
     this.localInputLength = 0;
     this.awaitingCommandPrompt = false;
@@ -362,7 +456,11 @@ class K8sExecTerminalBackend implements TerminalBackend {
 
     this.echoInputLocally(data);
     const normalized = data.replace(/\r/g, '\n');
-    this.socket?.send(normalized);
+    if (this.bearerSession) {
+      sendExecStdin(this.bearerSession, normalized);
+    } else {
+      this.socket?.send(normalized);
+    }
 
     if (normalized.includes('\n')) {
       this.awaitingCommandPrompt = true;
@@ -371,6 +469,10 @@ class K8sExecTerminalBackend implements TerminalBackend {
   }
 
   setDimensions(dimensions: TerminalDimensions): void {
+    if (this.bearerSession) {
+      sendExecResize(this.bearerSession, dimensions.cols, dimensions.rows);
+      return;
+    }
     this.socket?.send(JSON.stringify({ resize: dimensions }));
   }
 }

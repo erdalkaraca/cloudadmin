@@ -150,7 +150,11 @@ export class CompanionK8sBackend implements K8sBackend {
     }
   }
 
-  supportsConsole(): boolean {
+  supportsPodConsole(): boolean {
+    return true;
+  }
+
+  supportsClusterConsole(): boolean {
     return true;
   }
 }
