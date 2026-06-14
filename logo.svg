@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" role="img" aria-label="CloudAdmin">
+  <defs>
+    <linearGradient id="ca-core" x1="6" y1="4" x2="30" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(2 4) scale(0.8)">
+    <path
+      d="M20 6 L33 27 H7 Z"
+      fill="none"
+      stroke="#cbd5e1"
+      stroke-width="1.75"
+      stroke-linejoin="round"
+    />
+    <path
+      d="M20 6 L33 27 H7 Z"
+      fill="none"
+      stroke="#38bdf8"
+      stroke-width="1.5"
+      stroke-linejoin="round"
+      opacity="0.65"
+    />
+    <circle cx="20" cy="6" r="5" fill="url(#ca-core)"/>
+    <circle cx="33" cy="27" r="4" fill="#7dd3fc"/>
+    <circle cx="7" cy="27" r="4" fill="#7dd3fc"/>
+  </g>
+  <text
+    x="46"
+    y="26"
+    font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
+    font-size="17"
+    font-weight="600"
+    letter-spacing="-0.02em"
+    fill="#0f172a"
+  >
+    CloudAdmin
+  </text>
+</svg>

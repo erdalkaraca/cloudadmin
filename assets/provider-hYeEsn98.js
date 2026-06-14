@@ -1,0 +1,1 @@
+var e=`Kubernetes (Companion + kubectl)`,t=`k8s-bearer`,n=`Kubernetes (JS API + Bearer Token)`,r=`Kubernetes`;export{t as i,n,e as r,r as t};

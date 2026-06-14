@@ -1,0 +1,4 @@
+const __vite__mapDeps=(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/plain-editor-B5aVx7Bw-B72y0G9c.js","assets/dist-DFIIeeW2.js","assets/preload-helper-DyX4PGuE.js","assets/fs-access-D-fDaJ8V-D4qvKoNj.js","assets/dist-iKjNhF4k.css"])))=>i.map(i=>d[i]);
+import{n as e,ot as t}from"./dist-DFIIeeW2.js";import{n}from"./fs-access-D-fDaJ8V-D4qvKoNj.js";import{t as r}from"./preload-helper-DyX4PGuE.js";e.registerEditorInputHandler({editorId:`system.plain-editor`,label:`Text`,icon:`file-lines`,ranking:1,lazyInit:async()=>{await r(()=>import(`./plain-editor-B5aVx7Bw-B72y0G9c.js`),__vite__mapDeps([0,1,2,3,4]))},canHandle:e=>e instanceof n,handle:async n=>{let r={title:n.getWorkspacePath(),data:n,key:n.getWorkspacePath(),icon:e.getFileIcon(n.getName()),state:{}};return r.component=e=>t`
+      <docks-plain-editor id=${e} .input=${r}></docks-plain-editor>
+    `,r}});
