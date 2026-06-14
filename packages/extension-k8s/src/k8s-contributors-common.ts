@@ -16,8 +16,9 @@ import {
   listNamespacedResourceTypes,
   listNamespaces,
   listPods,
-  type K8sPersistData,
-} from './api/k8s-client';
+} from './api/k8s-api';
+import { createK8sBackend } from './api/k8s-backend';
+import type { K8sPersistData } from './api/k8s-types';
 import { K8S_EXEC_PROFILE_ID } from './k8s-terminal-profile';
 import { PROVIDER_ID_BEARER } from './provider';
 
@@ -107,8 +108,8 @@ export function persistOf(connection: CloudConnection): K8sPersistData {
 
 export type PersistResolver = (connection: CloudConnection) => K8sPersistData;
 
-function shouldShowTerminalAction(connection: CloudConnection, persistOf: PersistResolver): boolean {
-  return persistOf(connection).authMode === 'companion';
+function shouldShowTerminalAction(connection: CloudConnection): boolean {
+  return createK8sBackend(connection).supportsConsole();
 }
 
 function parseCommandArgs(raw: string): string[] {
@@ -122,7 +123,7 @@ async function openTerminalForNode(
   persistOf: PersistResolver,
 ): Promise<void> {
   const persist = persistOf(connection);
-  if (persist.authMode !== 'companion') {
+  if (!createK8sBackend(connection).supportsConsole()) {
     throw new Error('Console is only available for companion-backed connections.');
   }
 
@@ -179,7 +180,7 @@ async function openClusterTerminal(
   persistOf: PersistResolver,
 ): Promise<void> {
   const persist = persistOf(connection);
-  if (persist.authMode !== 'companion') {
+  if (!createK8sBackend(connection).supportsConsole()) {
     throw new Error('Cluster console is only available for companion-backed connections.');
   }
 
@@ -262,7 +263,7 @@ export function commonNodeActions(
     const contexts = persist.contexts?.map((c) => c.trim()).filter(Boolean) ?? [];
     if (contexts.length === 1) {
       const actions: CloudTreeAction[] = [addManualNamespaceAction(connection, persistOf, contexts[0])];
-      if (shouldShowTerminalAction(connection, persistOf)) {
+      if (shouldShowTerminalAction(connection)) {
         actions.push({
           id: 'k8s.cluster.console',
           label: 'Open cluster console',
@@ -278,7 +279,7 @@ export function commonNodeActions(
   if (node.kind === CloudTreeNodeKind.Scope) {
     const contextName = String(node.meta?.kubeContext ?? node.label).trim() || 'default';
     const actions: CloudTreeAction[] = [addManualNamespaceAction(connection, persistOf, contextName)];
-    if (shouldShowTerminalAction(connection, persistOf)) {
+    if (shouldShowTerminalAction(connection)) {
       actions.push({
         id: 'k8s.scope.console',
         label: 'Open cluster console',
@@ -299,7 +300,7 @@ export function commonNodeActions(
     const persist = persistOf(connection);
     const manual = contextName ? namespacesForContext(persist, contextName) : [];
     if (!oldName || !contextName || !manual.includes(oldName)) {
-      if (shouldShowTerminalAction(connection, persistOf)) {
+      if (shouldShowTerminalAction(connection)) {
         return [
           {
             id: 'k8s.namespace.console',
@@ -352,7 +353,7 @@ export function commonNodeActions(
         },
       },
     ];
-    if (shouldShowTerminalAction(connection, persistOf)) {
+    if (shouldShowTerminalAction(connection)) {
       actions.push({
         id: 'k8s.namespace.console',
         label: 'Open cluster console',
@@ -364,7 +365,7 @@ export function commonNodeActions(
   }
 
   if (
-    shouldShowTerminalAction(connection, persistOf) &&
+    shouldShowTerminalAction(connection) &&
     node.kind === CloudTreeNodeKind.Group &&
     typeof node.meta?.namespace === 'string' &&
     typeof node.meta?.podName === 'string' &&
@@ -415,7 +416,7 @@ export function commonNodeActions(
     },
   ];
 
-  if (shouldShowTerminalAction(connection, persistOf)) {
+  if (shouldShowTerminalAction(connection)) {
     actions.push({
       id: 'k8s.workload.console',
       label: 'Open console',
@@ -442,11 +443,12 @@ export function createTreeContributor(
     providerId,
     async getChildren(parent, connection) {
       await ensureToken(connection);
+      const backend = createK8sBackend(connection);
       const persist = persistOf(connection);
       const childrenForContext = async (contextNameRaw: string): Promise<CloudTreeNodeRef[]> => {
         const contextName = String(contextNameRaw).trim();
         const scopedPersist: K8sPersistData = { ...persist, context: contextName || persist.context };
-        const discovered = await listNamespaces(connection.id, scopedPersist);
+        const discovered = await listNamespaces(backend, scopedPersist);
         const manual = namespacesForContext(persist, contextName);
         const namespaceMap = new Map<string, { name: string; uid: string }>();
         for (const ns of discovered) {
@@ -508,7 +510,7 @@ export function createTreeContributor(
         if (clusterRoot === 'true') {
           const contextName = String(parent.meta?.kubeContext ?? persist.context ?? '').trim();
           const scopedPersist: K8sPersistData = { ...persist, context: contextName || persist.context };
-          const types = await listClusterResourceTypes(connection.id, scopedPersist);
+          const types = await listClusterResourceTypes(backend, scopedPersist);
           return sortNodesByLabel(types.map((resourceType) => ({
             nodeId: nodeId(
               connection.id,
@@ -540,7 +542,7 @@ export function createTreeContributor(
         if (clusterScoped && clusterTypeName && clusterTypeGroupVersion && clusterTypeKind) {
           const contextName = String(parent.meta?.kubeContext ?? persist.context ?? '').trim();
           const scopedPersist: K8sPersistData = { ...persist, context: contextName || persist.context };
-          const objects = await listClusterObjects(connection.id, scopedPersist, {
+          const objects = await listClusterObjects(backend, scopedPersist, {
             groupVersion: clusterTypeGroupVersion,
             resourceName: clusterTypeName,
             kind: clusterTypeKind,
@@ -579,7 +581,7 @@ export function createTreeContributor(
           const contextName = String(parent.meta?.kubeContext ?? persist.context ?? '').trim();
           if (!namespace) return [];
           const scopedPersist: K8sPersistData = { ...persist, context: contextName || persist.context };
-          const types = await listNamespacedResourceTypes(connection.id, scopedPersist);
+          const types = await listNamespacedResourceTypes(backend, scopedPersist);
           return sortNodesByLabel(types.map((resourceType) => ({
             nodeId: nodeId(
               connection.id,
@@ -613,7 +615,7 @@ export function createTreeContributor(
           const contextName = String(parent.meta?.kubeContext ?? persist.context ?? '').trim();
           if (!namespace) return [];
           const scopedPersist: K8sPersistData = { ...persist, context: contextName || persist.context };
-          const objects = await listNamespacedObjects(connection.id, scopedPersist, namespace, {
+          const objects = await listNamespacedObjects(backend, scopedPersist, namespace, {
             groupVersion: resourceTypeGroupVersion,
             resourceName: resourceTypeName,
             kind: resourceTypeKind,
@@ -678,7 +680,7 @@ export function createTreeContributor(
           })));
         }
         const scopedPersist: K8sPersistData = { ...persist, context: contextName || persist.context };
-        const pods = await listPods(connection.id, scopedPersist, namespace);
+        const pods = await listPods(backend, scopedPersist, namespace);
         const podNodes: CloudTreeNodeRef[] = pods.map((pod) => ({
           nodeId: nodeId(connection.id, CloudTreeNodeKind.Group, namespace, 'pod', pod.name),
           connectionId: connection.id,

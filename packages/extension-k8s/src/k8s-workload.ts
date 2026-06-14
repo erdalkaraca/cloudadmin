@@ -10,7 +10,9 @@ import {
   getNamespacedObject,
   getPod,
   getPodLogs,
-} from './api/k8s-client';
+} from './api/k8s-api';
+import { createK8sBackend } from './api/k8s-backend';
+import type { K8sPersistData } from './api/k8s-types';
 import { persistOf } from './k8s-contributors-common';
 
 function contextOf(context: CloudTreeActionContext): string | undefined {
@@ -134,11 +136,18 @@ function jsonToYaml(value: unknown, indentLevel = 0): string {
   return `${indent}${scalarToYaml(value)}`;
 }
 
+function scopedContext(context: CloudTreeActionContext) {
+  return {
+    backend: createK8sBackend(context.connection),
+    persist: scopedPersist(context),
+  };
+}
+
 async function getInventoryObject(context: CloudTreeActionContext): Promise<unknown> {
-  const persist = scopedPersist(context);
+  const { backend, persist } = scopedContext(context);
   if (isClusterScopedNode(context)) {
     return getClusterObject(
-      context.connection.id,
+      backend,
       persist,
       {
         groupVersion: objectTypeGroupVersionOf(context),
@@ -149,7 +158,7 @@ async function getInventoryObject(context: CloudTreeActionContext): Promise<unkn
     );
   }
   return getNamespacedObject(
-    context.connection.id,
+    backend,
     persist,
     namespaceOf(context),
     {
@@ -212,9 +221,9 @@ export function createK8sWorkloadHandler(providerId: string): CloudWorkloadHandl
         };
       }
 
-      const persist = scopedPersist(context);
+      const { backend, persist } = scopedContext(context);
       const pod = (await getPod(
-        context.connection.id,
+        backend,
         persist,
         namespaceOf(context),
         podNameOf(context),
@@ -230,9 +239,9 @@ export function createK8sWorkloadHandler(providerId: string): CloudWorkloadHandl
     },
 
     async fetchLogs(context, options) {
-      const persist = scopedPersist(context);
+      const { backend, persist } = scopedContext(context);
       return getPodLogs(
-        context.connection.id,
+        backend,
         persist,
         namespaceOf(context),
         podNameOf(context),
@@ -252,9 +261,9 @@ export function createK8sWorkloadHandler(providerId: string): CloudWorkloadHandl
         };
       }
 
-      const persist = scopedPersist(context);
+      const { backend, persist } = scopedContext(context);
       const pod = (await getPod(
-        context.connection.id,
+        backend,
         persist,
         namespaceOf(context),
         podNameOf(context),
@@ -288,9 +297,9 @@ export function createK8sWorkloadHandler(providerId: string): CloudWorkloadHandl
         return getInventoryObject(context);
       }
 
-      const persist = scopedPersist(context);
+      const { backend, persist } = scopedContext(context);
       return getPod(
-        context.connection.id,
+        backend,
         persist,
         namespaceOf(context),
         podNameOf(context),

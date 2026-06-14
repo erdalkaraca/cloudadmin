@@ -12,9 +12,9 @@ import {
 import { k8sConnectionDialogRequired } from './k8s-connection-dialog';
 import {
   type K8sPersistData,
-  testK8sConnection,
   validateK8sCredentials,
 } from './api/k8s-client';
+import { createK8sBackend } from './api/k8s-backend';
 import {
   commonNodeActions,
   contextsOf,
@@ -69,7 +69,7 @@ export const bearerConnectionContributor: CloudConnectionContributor = {
   async restore(connection) {
     const persist = persistBearerOf(connection);
     try {
-      await testK8sConnection(connection.id, persist);
+      await createK8sBackend(connection).testConnection(persist);
       return {
         ...connection,
         persistData: {
