@@ -1,0 +1,17 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    uses: ./.github/workflows/reusable-build.yml
+    needs: []
+    with:
+      node-version: '22'
+      upload-artifacts: true
+      artifact-name: 'ci-build-files'
+      artifact-retention-days: 7

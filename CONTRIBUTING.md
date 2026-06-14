@@ -90,3 +90,40 @@ To remove PWA support: remove the PWA extension from `packages/app/package.json`
 ## Framework
 
 CloudAdmin is built on [Eclipse Docks](https://github.com/eclipse-docks/core). Refer to its documentation for layout system, contribution registries, toolbar contributions, and dialog APIs.
+
+## CI/CD and GitHub Pages
+
+### Local validation
+
+```bash
+npm run validate-ci
+```
+
+Runs the same build check as GitHub Actions before you push.
+
+### Workflows
+
+| Workflow | Trigger |
+|----------|---------|
+| `ci.yml` | Push/PR to `main` or `develop` |
+| `pr-validation.yml` | PR opened/updated |
+| `auto-tag.yml` | Push to `main` with `vX.Y.Z` in commit subject |
+| `build-and-deploy.yml` | Semver tag push (`X.Y.Z`) → deploy to `gh-pages` |
+
+Hosted demo: **https://erdalkaraca.github.io/cloudadmin/**
+
+CI builds with `VITE_BASE_PATH=/<repo-name>/` so the subpath matches GitHub Pages project sites.
+
+### Releasing
+
+1. Run VS Code task **trigger-release (dry-run)** to preview the next version
+2. Run **trigger-release** (or `./scripts/trigger-release.sh patch`) on `main`
+3. The script pushes an empty `Release: vX.Y.Z` commit → `auto-tag.yml` creates tag + GitHub Release → `build-and-deploy.yml` publishes to `gh-pages`
+
+Optional: set `OPENAI_API_KEY` in root `.env` for AI-generated release notes.
+
+### One-time GitHub repo setup
+
+1. **Settings → Pages → Build and deployment** — source: branch **`gh-pages`**, folder **`/ (root)`**
+2. **Settings → Actions → General → Workflow permissions** — enable **Read and write permissions**
+3. **Settings → Secrets → Actions** — add **`PAT_TOKEN`** (recommended so auto-tag tag pushes trigger `build-and-deploy`; the default `GITHUB_TOKEN` often does not chain workflows)

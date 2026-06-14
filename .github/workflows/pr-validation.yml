@@ -1,0 +1,13 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  build-check:
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      node-version: '22'
+      upload-artifacts: false

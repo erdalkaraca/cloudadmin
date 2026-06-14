@@ -33,6 +33,7 @@ export default defineConfig(({ mode }) => {
     resolveDepVersionsPlugin(),
     localAliasesPlugin({
       useSrcInDev: true,
+      alwaysUseSrc: true,
       patterns: [{ folderPrefix: 'extension-' }],
     }),
     mkcert(),

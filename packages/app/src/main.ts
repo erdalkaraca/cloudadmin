@@ -22,7 +22,7 @@ contributionRegistry.registerContribution(TOOLBAR_MAIN, {
   slot: 'start',
   component:
     '<span style="display:inline-flex;align-items:center;gap:0.5rem;margin-right:0.75rem;" aria-label="CloudAdmin">' +
-    '<img src="/favicon.svg" alt="" width="28" height="28" style="display:block;flex-shrink:0;" />' +
+    `<img src="${import.meta.env.BASE_URL}favicon.svg" alt="" width="28" height="28" style="display:block;flex-shrink:0;" />` +
     '<span style="font-weight:600;font-size:1rem;font-family:system-ui,sans-serif;color:currentColor;letter-spacing:-0.02em;">CloudAdmin</span>' +
     '</span>',
 } as HTMLContribution);
