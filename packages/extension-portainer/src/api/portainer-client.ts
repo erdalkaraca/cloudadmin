@@ -188,3 +188,82 @@ export async function containerLifecycle(
     throw new Error(`${operation} container: ${res.status} ${body.slice(0, 120)}`);
   }
 }
+
+export interface CreateContainerExecParams {
+  endpointId: number;
+  containerId: string;
+  command: string[];
+}
+
+export async function createContainerExec(
+  connectionId: string,
+  persist: PortainerPersistData,
+  params: CreateContainerExecParams,
+): Promise<string> {
+  const res = await portainerFetch(
+    connectionId,
+    persist,
+    containerPath(params.endpointId, params.containerId, '/exec'),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        AttachStdin: true,
+        AttachStdout: true,
+        AttachStderr: true,
+        Tty: true,
+        Cmd: params.command,
+      }),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`create exec: ${res.status} ${body.slice(0, 240)}`);
+  }
+
+  const payload = (await res.json()) as { Id?: string };
+  const execId = payload.Id?.trim();
+  if (!execId) throw new Error('Portainer exec response missing Id.');
+  return execId;
+}
+
+export async function resizeContainerExec(
+  connectionId: string,
+  persist: PortainerPersistData,
+  endpointId: number,
+  execId: string,
+  dimensions: { cols: number; rows: number },
+): Promise<void> {
+  const query = new URLSearchParams({
+    h: String(dimensions.rows),
+    w: String(dimensions.cols),
+  });
+  const res = await portainerFetch(
+    connectionId,
+    persist,
+    `/api/endpoints/${endpointId}/docker/exec/${encodeURIComponent(execId)}/resize?${query}`,
+    { method: 'POST' },
+  );
+  if (!res.ok) return;
+}
+
+function toWebSocketBase(serverUrl: string): string {
+  const url = new URL(serverUrl);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '';
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
+export function buildPortainerExecWsUrl(
+  persist: PortainerPersistData,
+  params: { endpointId: number; execId: string; apiKey: string },
+): string {
+  const wsBase = toWebSocketBase(baseUrl(persist));
+  const url = new URL('/api/websocket/exec', `${wsBase}/`);
+  url.searchParams.set('endpointId', String(params.endpointId));
+  url.searchParams.set('id', params.execId);
+  url.searchParams.set('X-API-Key', params.apiKey);
+  return url.toString();
+}

@@ -6,4 +6,5 @@ extensionRegistry.registerExtension({
   description: 'Portainer cloud provider (stub — see README)',
   loader: () => import('./portainer-extension-loader'),
   icon: 'cubes',
+  dependencies: ['@eclipse-docks/extension-terminal'],
 });

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@eclipse-docks/core": "^0.x",
+    "@eclipse-docks/extension-terminal": "^0.x",
     "extension-cloud": "*"
   },
   "devDependencies": {
